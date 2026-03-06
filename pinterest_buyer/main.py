@@ -71,28 +71,40 @@ def seed_existing_campaigns() -> None:
     """
     Discover existing Pinterest campaigns and mirror them into campaign_log.
 
-    Called on first run (--seed) so the budget engine can manage campaigns
-    that were created before PAMBS existed.  Safe to call repeatedly — uses
-    upsert so existing records are not overwritten.
+    Safe to call repeatedly — uses upsert so existing records are not overwritten.
 
-    Name convention assumed (matches campaign_launcher naming):
-      "{brand} — Scale: {Actalike|Pplus|Broad|Keyword}"
-      "{brand} — Discovery …"
-      "{brand} — P+ Challenger …"
+    Brand detection uses BRAND_CAMPAIGN_KEYWORDS (keyword match on campaign name).
+    Campaign-type detection maps name fragments to internal type keys.
+    ACTIVE campaigns are seeded as 'active'; all others as 'paused'.
+    Only active campaigns are managed by PAMBS; paused ones are recorded for
+    historical context but excluded from budget optimisation.
     """
     from datetime import date as _date
     log.info("Seeding existing Pinterest campaigns from API...")
 
-    # Map display names used in campaign names → internal campaign_type keys
-    _type_hints = {
-        "actalike":   "scale_actalike",
-        "pplus":      "scale_pplus",
-        "p+":         "scale_pplus",
-        "broad":      "scale_broad",
-        "keyword":    "scale_keyword",
-        "discovery":  "discovery",
-        "challenger": "scale_pplus",
-    }
+    # Map name fragments → internal campaign_type keys (checked in order)
+    _type_hints: list[tuple[str, str]] = [
+        ("actalike",         "scale_actalike"),
+        ("purchaseractalike","scale_actalike"),
+        ("pplus",            "scale_pplus"),
+        ("p+",               "scale_pplus"),
+        ("performance_plus", "scale_pplus"),
+        ("performance plus", "scale_pplus"),
+        ("perf+",            "scale_pplus"),
+        ("kw only",          "scale_keyword"),
+        ("kw_",              "scale_keyword"),
+        ("keyword",          "scale_keyword"),
+        ("broad",            "scale_broad"),
+        ("interest",         "scale_broad"),
+        ("beauty interest",  "scale_broad"),
+        ("discovery",        "discovery"),
+        ("weekly",           "discovery"),
+        ("test",             "discovery"),
+        ("challenger",       "scale_pplus"),
+        ("retargeting",      "discovery"),   # closest PAMBS type for existing retarg
+        ("--rem--",          "discovery"),
+        ("--pro--",          "discovery"),
+    ]
 
     try:
         campaigns = pinterest.list_campaigns()
@@ -101,26 +113,34 @@ def seed_existing_campaigns() -> None:
         return
 
     seeded = 0
+    skipped = 0
     for c in campaigns:
-        name_lower = c.get("name", "").lower()
+        name_lower  = c.get("name", "").lower()
         campaign_id = c["id"]
 
-        # Identify brand
-        brand = next(
-            (b for b in config.BRANDS if b.replace("_", " ") in name_lower or b in name_lower),
-            None,
-        )
+        # ── Brand detection: keyword match (BRAND_CAMPAIGN_KEYWORDS order matters) ──
+        brand = None
+        for b, keywords in config.BRAND_CAMPAIGN_KEYWORDS.items():
+            if any(kw in name_lower for kw in keywords):
+                brand = b
+                break
+
+        # Fallback: if account has only one brand, assign unmatched campaigns to it
+        if not brand and len(config.BRANDS) == 1:
+            brand = config.BRANDS[0]
+
         if not brand:
-            log.debug("Skipping unknown brand campaign: %s", c.get("name"))
+            log.debug("Skipping unrecognised brand in campaign: %s", c.get("name"))
+            skipped += 1
             continue
 
-        # Identify campaign_type
+        # ── Campaign-type detection ───────────────────────────────────────────
         ctype = next(
-            (v for k, v in _type_hints.items() if k in name_lower),
-            "discovery",
+            (v for k, v in _type_hints if k in name_lower),
+            "discovery",   # safe default
         )
 
-        status = "active" if c.get("status") == "ACTIVE" else "paused"
+        status       = "active" if c.get("status") == "ACTIVE" else "paused"
         budget_micro = c.get("daily_spend_cap") or 0
         budget_usd   = budget_micro / 1_000_000
 
@@ -131,16 +151,17 @@ def seed_existing_campaigns() -> None:
                 "campaign_type":         ctype,
                 "pinterest_campaign_id": campaign_id,
                 "status":                status,
-                "budget_usd":            budget_usd or config.SCALE_CAMPAIGN_BUDGET_USD,
+                "budget_usd":            budget_usd or config.CAMPAIGN_BUDGETS.get(ctype, 300),
                 "launch_date":           _date.today().isoformat(),
                 "is_challenger":         1 if "challenger" in name_lower else 0,
             }
         )
-        log.info("Seeded: %s → brand=%s type=%s status=%s $%.0f/day",
+        log.info("Seeded: %-70s → brand=%-20s type=%-15s status=%s $%.0f/day",
                  c.get("name"), brand, ctype, status, budget_usd)
         seeded += 1
 
-    log.info("Seeding complete: %d campaigns mirrored.", seeded)
+    log.info("Seeding complete: %d campaigns mirrored, %d skipped (unrecognised brand).",
+             seeded, skipped)
 
 
 # ── Daypart + keyword ingestion ───────────────────────────────────────────────

@@ -4,14 +4,34 @@ Campaign launcher module.
 Handles:
   1. Weekly discovery campaign creation (Mondays)
   2. Monthly Performance+ challenger campaign (first Monday of the month)
+  3. Scale campaign bootstrap (idempotent — runs every daily cycle)
+
+Naming convention
+-----------------
+  Campaign : {CODE} | {FUNNEL} | {TYPE}    | {AUDIENCE}          | {PERIOD}
+             MTB    | TOF      | Test       | W11-2026             (discovery)
+             MTB    | TOF      | Scale      | Actalike            | Q1-2026
+             MTB    | TOF      | Scale      | Perf+               | Q1-2026
+             MTB    | TOF      | Scale      | Broad               | Q1-2026
+             MTB    | TOF      | Scale      | Keyword             | Q1-2026
+             MTB    | TOF      | Challenger | Perf+               | Mar-2026
+
+  Ad set  : {CODE} | {TARGETING_DETAIL}              | {GEO} | {BID}
+             MTB    | Actalike-Purchasers-180d        | US    | Auto
+             MTB    | Perf+-Automated                 | US    | Auto
+             MTB    | Interest-Beauty+KW-Broad        | US    | Auto
+             MTB    | KW-Dermaplaning+SkinCare        | US    | Auto
+             MTB    | Actalike-Purchasers-1-3pct      | US    | Auto
+
+  Ad      : (same name as the originating Meta creative — no renaming)
 
 Targeting specs per campaign type
 ----------------------------------
-  discovery        — Actalike 1–3%, Pinterest interest expansion ON
-  scale_actalike   — Actalike 0–2%, manually defined
-  scale_pplus      — Pinterest automated (Performance+)
-  scale_broad      — Interest + keyword targeting combined
-  scale_keyword    — Search keyword targeting only
+  discovery        — Actalike 1–3%, purchasers seed, interest expansion ON
+  scale_actalike   — Actalike 0–2%, purchasers seed (180-day)
+  scale_pplus      — Pinterest Performance+ automated
+  scale_broad      — Interest + broad keywords
+  scale_keyword    — Exact/phrase keywords only
 """
 
 import logging
@@ -26,37 +46,114 @@ from state import db
 log = logging.getLogger(__name__)
 
 
+# ── Naming helpers ────────────────────────────────────────────────────────────
+
+def _brand_code(brand: str) -> str:
+    return config.BRAND_CONFIG.get(brand, {}).get("code", brand.upper()[:3])
+
+
+def _geo_label(brand: str) -> str:
+    geos = config.BRAND_CONFIG.get(brand, {}).get("geo", ["US"])
+    return "+".join(geos)
+
+
+def _quarter_label(d: date | None = None) -> str:
+    d = d or date.today()
+    q = (d.month - 1) // 3 + 1
+    return f"Q{q}-{d.year}"
+
+
+def _week_label(d: date | None = None) -> str:
+    d = d or date.today()
+    return f"W{d.strftime('%W')}-{d.year}"
+
+
+def _month_label(d: date | None = None) -> str:
+    d = d or date.today()
+    return d.strftime("%b-%Y")
+
+
+def _campaign_name(brand: str, camp_type: str, today: date | None = None) -> str:
+    """Return the standardised campaign name for the given type."""
+    today = today or date.today()
+    code  = _brand_code(brand)
+    _TYPE_MAP = {
+        "discovery":      ("TOF", "Test",       None,       _week_label(today)),
+        "scale_actalike": ("TOF", "Scale",      "Actalike", _quarter_label(today)),
+        "scale_pplus":    ("TOF", "Scale",      "Perf+",    _quarter_label(today)),
+        "scale_broad":    ("TOF", "Scale",      "Broad",    _quarter_label(today)),
+        "scale_keyword":  ("TOF", "Scale",      "Keyword",  _quarter_label(today)),
+        "challenger":     ("TOF", "Challenger", "Perf+",    _month_label(today)),
+    }
+    funnel, ctype_label, audience, period = _TYPE_MAP.get(
+        camp_type, ("TOF", camp_type.title(), None, _quarter_label(today))
+    )
+    if audience:
+        return f"{code} | {funnel} | {ctype_label} | {audience} | {period}"
+    return f"{code} | {funnel} | {ctype_label} | {period}"
+
+
+def _adset_name(brand: str, targeting_detail: str) -> str:
+    """Return the standardised ad set name."""
+    code = _brand_code(brand)
+    geo  = _geo_label(brand)
+    return f"{code} | {targeting_detail} | {geo} | Auto"
+
+
 # ── Targeting specs ───────────────────────────────────────────────────────────
 
+def _actalike_audiences(brand: str) -> list[str]:
+    """Return configured seed audience IDs, or empty list."""
+    aud_id = config.BRAND_AUDIENCE_IDS.get(brand, "")
+    return [aud_id] if aud_id else []
+
+
 def _discovery_targeting(brand: str) -> dict:
-    return {
-        "audience_types": ["ACTALIKE"],
-        "actalike_sources": [],        # populated from existing customer lists
-        "actalike_type": "ACTALIKE",
-        "actalike_sizes": [0.01, 0.03],  # 1–3%
+    spec: dict = {
+        "audience_types":        ["ACTALIKE"],
+        "actalike_type":         "ACTALIKE",
+        "actalike_sizes":        list(config.ACTALIKE_DISC_SIZE_RANGE),
         "auto_interest_expansion": True,
+        "geo":                   config.BRAND_CONFIG.get(brand, {}).get("geo", ["US"]),
     }
+    audiences = _actalike_audiences(brand)
+    if audiences:
+        spec["audiences"] = audiences
+    return spec
 
 
-def _actalike_targeting() -> dict:
-    return {
+def _actalike_targeting(brand: str) -> dict:
+    spec: dict = {
         "audience_types": ["ACTALIKE"],
-        "actalike_sizes": [0.00, 0.02],  # 0–2%
+        "actalike_sizes": list(config.ACTALIKE_SCALE_SIZE_RANGE),
+        "geo":            config.BRAND_CONFIG.get(brand, {}).get("geo", ["US"]),
     }
+    audiences = _actalike_audiences(brand)
+    if audiences:
+        spec["audiences"] = audiences
+    return spec
 
 
-def _pplus_targeting() -> dict:
+def _pplus_targeting(brand: str) -> dict:
     """Performance+ uses Pinterest automated targeting."""
-    return {"audience_types": ["AUTOPILOT"]}
+    return {
+        "audience_types": ["AUTOPILOT"],
+        "geo":            config.BRAND_CONFIG.get(brand, {}).get("geo", ["US"]),
+    }
 
 
 def _broad_targeting(brand: str) -> dict:
-    return {
-        "audience_types": ["INTEREST", "KEYWORD"],
-        "interests": [],   # populated from Pinterest interest taxonomy
+    spec: dict = {
+        "audience_types": ["KEYWORD"],
         "keywords": [{"match_type": "BROAD", "value": kw}
                      for kw in config.KEYWORD_SEEDS.get(brand, [])],
+        "geo": config.BRAND_CONFIG.get(brand, {}).get("geo", ["US"]),
     }
+    interest_ids = config.INTEREST_SEEDS.get(brand, [])
+    if interest_ids:
+        spec["audience_types"] = ["INTEREST", "KEYWORD"]
+        spec["interests"] = interest_ids
+    return spec
 
 
 def _keyword_targeting(brand: str) -> dict:
@@ -64,15 +161,26 @@ def _keyword_targeting(brand: str) -> dict:
         "audience_types": ["KEYWORD"],
         "keywords": [{"match_type": "EXACT", "value": kw}
                      for kw in config.KEYWORD_SEEDS.get(brand, [])],
+        "geo": config.BRAND_CONFIG.get(brand, {}).get("geo", ["US"]),
     }
 
 
 TARGETING_FACTORY = {
     "discovery":      _discovery_targeting,
-    "scale_actalike": lambda brand: _actalike_targeting(),
-    "scale_pplus":    lambda brand: _pplus_targeting(),
+    "scale_actalike": _actalike_targeting,
+    "scale_pplus":    _pplus_targeting,
     "scale_broad":    _broad_targeting,
     "scale_keyword":  _keyword_targeting,
+}
+
+# Human-readable targeting detail used in ad set names
+_ADSET_DETAIL = {
+    "discovery":      f"Actalike-Purchasers-{config.ACTALIKE_DISC_SIZE_RANGE[0]*100:.0f}-{config.ACTALIKE_DISC_SIZE_RANGE[1]*100:.0f}pct",
+    "scale_actalike": f"Actalike-Purchasers-{config.ACTALIKE_SEED_DAYS}d",
+    "scale_pplus":    "Perf+-Automated",
+    "scale_broad":    "Interest-Beauty+KW-Broad",
+    "scale_keyword":  "KW-Dermaplaning+SkinCare",
+    "challenger":     "Perf+-Automated",
 }
 
 
@@ -99,6 +207,10 @@ def launch_weekly_discovery(brand: str) -> str | None:
     """
     Create a new weekly discovery campaign for the given brand.
     Returns the new Pinterest campaign ID, or None if no creatives qualify.
+
+    Naming: MTB | TOF | Test | W11-2026
+    Ad set: MTB | Actalike-Purchasers-1-3pct | US | Auto
+    Ads:    same name as the originating Meta creative
     """
     log.info("[%s] Launching weekly discovery campaign.", brand)
 
@@ -107,42 +219,43 @@ def launch_weekly_discovery(brand: str) -> str | None:
         log.info("[%s] No qualifying creatives — skipping discovery launch.", brand)
         return None
 
-    week_label = date.today().strftime("%Y-W%W")
-    campaign_name = f"{brand} — Discovery {week_label}"
+    today         = date.today()
+    camp_name     = _campaign_name(brand, "discovery", today)
+    adset_detail  = _ADSET_DETAIL["discovery"]
+    adset_nm      = _adset_name(brand, adset_detail)
+    budget        = config.CAMPAIGN_BUDGETS["discovery"]
+    landing_url   = config.BRAND_LANDING_URLS.get(brand, "https://example.com")
 
     if config.SHADOW_MODE:
-        log.info("[SHADOW] Would create campaign: %s", campaign_name)
+        log.info("[SHADOW] Would create discovery campaign: %s", camp_name)
         return None
 
-    # Create the Pinterest campaign
     campaign_id = pinterest.create_campaign(
-        name=campaign_name,
-        daily_budget_usd=config.DISCOVERY_CAMPAIGN_BUDGET_USD,
+        name=camp_name,
+        daily_budget_usd=budget,
     )
 
-    # Create one ad group with discovery targeting
-    targeting = _discovery_targeting(brand)
-    ad_group_id = pinterest.create_ad_group(
+    targeting    = _discovery_targeting(brand)
+    ad_group_id  = pinterest.create_ad_group(
         campaign_id=campaign_id,
-        name=f"{brand} — Discovery AdGroup {week_label}",
+        name=adset_nm,
         targeting_spec=targeting,
     )
 
-    # Upload each creative and create ads
-    landing_url = config.BRAND_LANDING_URLS.get(brand, "https://example.com")
     for c in creatives:
         media_id = _upload_creative(c)
         if not media_id:
             continue
-        ad_id = pinterest.create_ad(
+        # Ad name = Meta creative name (unchanged)
+        ad_name = c.get("name") or c["meta_creative_id"]
+        ad_id   = pinterest.create_ad(
             ad_group_id=ad_group_id,
-            name=c.get("name", c["meta_creative_id"]),
+            name=ad_name,
             media_id=media_id,
             link=landing_url,
         )
         db.set_creative_pin_id(c["meta_creative_id"], "discovery", ad_id)
 
-    # Persist to campaign_log
     db.upsert_campaign(
         {
             "campaign_id":           campaign_id,
@@ -150,13 +263,13 @@ def launch_weekly_discovery(brand: str) -> str | None:
             "campaign_type":         "discovery",
             "pinterest_campaign_id": campaign_id,
             "status":                "active",
-            "budget_usd":            config.DISCOVERY_CAMPAIGN_BUDGET_USD,
-            "launch_date":           date.today().isoformat(),
+            "budget_usd":            budget,
+            "launch_date":           today.isoformat(),
             "is_challenger":         0,
         }
     )
 
-    log.info("[%s] Discovery campaign launched: %s", brand, campaign_id)
+    log.info("[%s] Discovery campaign launched: %s (%s)", brand, camp_name, campaign_id)
     return campaign_id
 
 
@@ -164,37 +277,36 @@ def launch_weekly_discovery(brand: str) -> str | None:
 
 def launch_monthly_challenger(brand: str) -> str | None:
     """
-    On the first Monday of each month, launch a Performance+ challenger campaign
-    at $300/day using current top creatives.
+    On the first Monday of each month, launch a Performance+ challenger campaign.
     Returns the Pinterest campaign ID, or None.
+
+    Naming: MTB | TOF | Challenger | Perf+ | Mar-2026
+    Ad set: MTB | Perf+-Automated | US | Auto
     """
     today = date.today()
     if today.weekday() != 0 or today.day > 7:
-        return None  # Only runs on the first Monday of the month
+        return None  # Only first Monday of the month
 
     log.info("[%s] Launching monthly Performance+ challenger.", brand)
 
-    # Reuse already-scored creatives from the DB (last 14 days)
-    from connectors import northbeam_connector
-    nb_data = northbeam_connector.fetch_campaign_roas(lookback_days=14)
-
-    month_label = today.strftime("%Y-%m")
-    campaign_name = f"{brand} — P+ Challenger {month_label}"
+    camp_name    = _campaign_name(brand, "challenger", today)
+    adset_nm     = _adset_name(brand, _ADSET_DETAIL["challenger"])
+    budget       = config.CAMPAIGN_BUDGETS["challenger"]
 
     if config.SHADOW_MODE:
-        log.info("[SHADOW] Would create challenger: %s", campaign_name)
+        log.info("[SHADOW] Would create challenger: %s", camp_name)
         return None
 
     campaign_id = pinterest.create_campaign(
-        name=campaign_name,
-        daily_budget_usd=config.CHALLENGER_BUDGET_USD,
+        name=camp_name,
+        daily_budget_usd=budget,
         objective="CATALOG_SALES",
     )
 
-    targeting = _pplus_targeting()
+    targeting   = _pplus_targeting(brand)
     ad_group_id = pinterest.create_ad_group(
         campaign_id=campaign_id,
-        name=f"{brand} — P+ Challenger AdGroup {month_label}",
+        name=adset_nm,
         targeting_spec=targeting,
     )
 
@@ -205,22 +317,34 @@ def launch_monthly_challenger(brand: str) -> str | None:
             "campaign_type":         "scale_pplus",
             "pinterest_campaign_id": campaign_id,
             "status":                "active",
-            "budget_usd":            config.CHALLENGER_BUDGET_USD,
+            "budget_usd":            budget,
             "launch_date":           today.isoformat(),
             "is_challenger":         1,
         }
     )
 
-    log.info("[%s] Challenger campaign launched: %s", brand, campaign_id)
+    log.info("[%s] Challenger campaign launched: %s (%s)", brand, camp_name, campaign_id)
     return campaign_id
 
 
-# ── Scale campaign bootstrap (run once per brand) ─────────────────────────────
+# ── Scale campaign bootstrap (idempotent, runs every cycle) ───────────────────
 
 def ensure_scale_campaigns_exist(brand: str) -> dict[str, str]:
     """
     Ensure all four scale campaigns exist for the brand.
     Creates any that are missing.  Returns {campaign_type: campaign_id}.
+
+    Naming examples (MTB):
+      MTB | TOF | Scale | Actalike | Q1-2026
+      MTB | TOF | Scale | Perf+    | Q1-2026
+      MTB | TOF | Scale | Broad    | Q1-2026
+      MTB | TOF | Scale | Keyword  | Q1-2026
+
+    Ad set examples:
+      MTB | Actalike-Purchasers-180d       | US | Auto
+      MTB | Perf+-Automated                | US | Auto
+      MTB | Interest-Beauty+KW-Broad       | US | Auto
+      MTB | KW-Dermaplaning+SkinCare       | US | Auto
     """
     existing = {
         c["campaign_type"]: c["campaign_id"]
@@ -229,21 +353,27 @@ def ensure_scale_campaigns_exist(brand: str) -> dict[str, str]:
         and not c.get("is_challenger")
     }
 
+    today = date.today()
+
     for ctype in config.SCALE_CAMPAIGN_TYPES:
         if ctype in existing:
             continue
 
-        name = f"{brand} — Scale: {ctype.replace('scale_', '').title()}"
+        camp_name   = _campaign_name(brand, ctype, today)
+        adset_nm    = _adset_name(brand, _ADSET_DETAIL[ctype])
+        budget      = config.CAMPAIGN_BUDGETS[ctype]
+        landing_url = config.BRAND_LANDING_URLS.get(brand, "https://example.com")
+
         if config.SHADOW_MODE:
-            log.info("[SHADOW] Would create scale campaign: %s", name)
+            log.info("[SHADOW] Would create scale campaign: %s", camp_name)
             existing[ctype] = f"shadow_{ctype}"
             continue
 
         targeting_fn = TARGETING_FACTORY[ctype]
         targeting    = targeting_fn(brand)
 
-        campaign_id  = pinterest.create_campaign(name, config.SCALE_CAMPAIGN_BUDGET_USD)
-        ad_group_id  = pinterest.create_ad_group(campaign_id, f"{name} AdGroup", targeting)
+        campaign_id  = pinterest.create_campaign(camp_name, budget)
+        ad_group_id  = pinterest.create_ad_group(campaign_id, adset_nm, targeting)
 
         db.upsert_campaign(
             {
@@ -252,12 +382,12 @@ def ensure_scale_campaigns_exist(brand: str) -> dict[str, str]:
                 "campaign_type":         ctype,
                 "pinterest_campaign_id": campaign_id,
                 "status":                "active",
-                "budget_usd":            config.SCALE_CAMPAIGN_BUDGET_USD,
-                "launch_date":           date.today().isoformat(),
+                "budget_usd":            budget,
+                "launch_date":           today.isoformat(),
                 "is_challenger":         0,
             }
         )
         existing[ctype] = campaign_id
-        log.info("[%s] Created scale campaign %s: %s", brand, ctype, campaign_id)
+        log.info("[%s] Created scale campaign %s: %s (%s)", brand, ctype, camp_name, campaign_id)
 
     return existing

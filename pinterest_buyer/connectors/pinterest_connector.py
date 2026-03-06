@@ -271,8 +271,8 @@ def get_campaign_analytics(
                 "VIDEO_3SEC_VIEWS_2,VIDEO_P0_COMBINED_2"
             ),
             "granularity":         "TOTAL",
-            "click_window_days":   1,
-            "view_window_days":    1,
+            "click_window_days":   config.CLICK_WINDOW_DAYS,
+            "view_window_days":    config.VIEW_WINDOW_DAYS,
         },
     )
     results = []
@@ -323,8 +323,8 @@ def get_ad_analytics(
                 "VIDEO_3SEC_VIEWS_2,VIDEO_P0_COMBINED_2"
             ),
             "granularity":       "TOTAL",
-            "click_window_days": 1,
-            "view_window_days":  1,
+            "click_window_days": config.CLICK_WINDOW_DAYS,
+            "view_window_days":  config.VIEW_WINDOW_DAYS,
         },
     )
     results = []
@@ -407,8 +407,8 @@ def get_hourly_campaign_analytics(
             "end_date":          date_str,
             "columns":           "CAMPAIGN_ID,SPEND_IN_DOLLAR,TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR",
             "granularity":       "HOUR",
-            "click_window_days": 1,
-            "view_window_days":  1,
+            "click_window_days": config.CLICK_WINDOW_DAYS,
+            "view_window_days":  config.VIEW_WINDOW_DAYS,
         },
     )
     results = []

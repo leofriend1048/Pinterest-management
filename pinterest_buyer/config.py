@@ -48,9 +48,75 @@ SCALE_CAMPAIGN_TYPES = [
     "scale_keyword",
 ]
 
+# ── Brand metadata (code used in naming convention, geo, conversion event) ────
+# Naming convention:
+#   Campaign : {CODE} | {FUNNEL} | {TYPE}       | {AUDIENCE}              | {PERIOD}
+#              MTB    | TOF      | Test          | W11-2026                 (discovery)
+#              MTB    | TOF      | Scale         | Actalike                | Q1-2026
+#              MTB    | TOF      | Scale         | Perf+                   | Q1-2026
+#              MTB    | TOF      | Scale         | Broad                   | Q1-2026
+#              MTB    | TOF      | Scale         | Keyword                 | Q1-2026
+#              MTB    | TOF      | Challenger    | Perf+                   | Mar-2026
+#
+#   Ad set  : {CODE} | {TARGETING_DETAIL}                     | {GEO} | {BID}
+#              MTB    | Actalike-Purchasers-180d               | US    | Auto
+#              MTB    | Perf+-Automated                        | US    | Auto
+#              MTB    | Interest-Beauty+KW-Broad               | US    | Auto
+#              MTB    | KW-Dermaplaning+SkinCare               | US    | Auto
+#              MTB    | Actalike-Purchasers-1-3pct             | US    | Auto
+#
+#   Ad      : (same name as the Meta creative — no renaming)
+#
+BRAND_CONFIG = {
+    "michael_todd_beauty": {
+        "code":             "MTB",
+        "geo":              ["US"],
+        "conversion_event": "checkout",
+    },
+    "nasalfresh_md": {
+        "code":             "NF",
+        "geo":              ["US"],
+        "conversion_event": "checkout",
+    },
+    "spa_sciences": {
+        "code":             "SS",
+        "geo":              ["US"],
+        "conversion_event": "checkout",
+    },
+}
+
+# Pinterest Saved Audience IDs for actalike seed (purchasers 180-day).
+# Fill in from Pinterest Ads Manager → Audiences after creating the list.
+# Leave empty to fall back to Pinterest's pixel-based actalike.
+BRAND_AUDIENCE_IDS = {
+    "michael_todd_beauty": os.getenv("MTB_PINTEREST_AUDIENCE_ID", ""),
+    "nasalfresh_md":       os.getenv("NF_PINTEREST_AUDIENCE_ID", ""),
+    "spa_sciences":        os.getenv("SS_PINTEREST_AUDIENCE_ID", ""),
+}
+
 # ── Budgets ───────────────────────────────────────────────────────────────────
-DISCOVERY_CAMPAIGN_BUDGET_USD = 300
-SCALE_CAMPAIGN_BUDGET_USD     = 300
+# Per campaign-type daily budgets (USD).  Adjust to match your targets.
+CAMPAIGN_BUDGETS = {
+    "discovery":      100,   # weekly creative test — conservative while learning
+    "scale_actalike": 500,   # purchaser actalike 0-2%
+    "scale_pplus":    500,   # Performance+ automated
+    "scale_broad":    300,   # interest + broad keywords
+    "scale_keyword":  300,   # exact/phrase keywords
+    "challenger":     300,   # monthly P+ challenger
+}
+
+# Legacy aliases kept for any code that still references these directly
+DISCOVERY_CAMPAIGN_BUDGET_USD = CAMPAIGN_BUDGETS["discovery"]
+SCALE_CAMPAIGN_BUDGET_USD     = CAMPAIGN_BUDGETS["scale_actalike"]
+
+# ── Attribution window ────────────────────────────────────────────────────────
+CLICK_WINDOW_DAYS = 7   # 7-day click attribution
+VIEW_WINDOW_DAYS  = 1   # 1-day view attribution
+
+# ── Actalike settings ─────────────────────────────────────────────────────────
+ACTALIKE_SEED_DAYS        = 180   # purchasers look-back window for seed audience
+ACTALIKE_SCALE_SIZE_RANGE = (0.00, 0.02)   # 0–2% for scale campaigns
+ACTALIKE_DISC_SIZE_RANGE  = (0.01, 0.03)   # 1–3% for discovery campaigns
 
 # ── Weekly discovery ──────────────────────────────────────────────────────────
 WEEKLY_CAMPAIGN_DAY         = "monday"
@@ -104,9 +170,25 @@ TARGET_ROAS = {
     "spa_sciences":        2.5,
 }
 
-# ── Brand landing pages (used as click-through URL for every ad) ─────────────
+# ── Brand landing pages (Northbeam + UTM tracked) ────────────────────────────
+# Pinterest dynamic macros:  {campaignid}, {adgroupid}, {adid}, {keyword},
+#                            {device}, {campaign_name}, {adgroup_name}
 BRAND_LANDING_URLS = {
-    "michael_todd_beauty": "https://www.michaeltoddbeauty.com",
+    "michael_todd_beauty": (
+        "https://michaeltoddbeauty.com/pages/sonicsmooth-pro-plus-12"
+        "?nbt=nb:pinterest::{campaignid}:{adgroupid}:{adid}"
+        "&nb_kwd={keyword}"
+        "&nb_device={device}"
+        "&nb_platform=pinterest"
+        "&nb_pn={product_name}"
+        "&nb_ppgid={promoted_product_group_id}"
+        "&nb_pid={product_id}"
+        "&nb_ppid={product_partition_id}"
+        "&utm_medium=paid"
+        "&utm_source=pinterest"
+        "&utm_campaign={campaign_name}"
+        "&utm_term={adgroup_name}"
+    ),
     "nasalfresh_md":       "https://www.nasalfreshmd.com",
     "spa_sciences":        "https://www.spasciences.com",
 }
@@ -114,8 +196,22 @@ BRAND_LANDING_URLS = {
 # ── Keyword seeds ─────────────────────────────────────────────────────────────
 KEYWORD_SEEDS = {
     "michael_todd_beauty": [
-        "dermaplaning", "facial hair removal", "peach fuzz removal",
-        "sonic facial cleansing", "face exfoliation", "skin smoothing device",
+        # Dermaplaning & facial tools (exact product territory)
+        "dermaplaning", "dermaplaning at home", "dermaplaning tool",
+        "peach fuzz removal", "facial hair removal", "face shaving for women",
+        # Skin care routines (high-intent adjacent)
+        "skin care routine", "skincare routine", "glow up skin care",
+        "how to get clear skin", "glowing skin tips", "good skin tips",
+        "skin care products", "face exfoliation", "exfoliating face",
+        # Sonic / facial device territory
+        "sonic facial cleansing", "facial cleansing brush", "face cleansing tool",
+        "skin smoothing device", "at home facial", "facial treatment at home",
+        # Beauty routine entry points
+        "grwm skincare", "morning skincare routine", "night skin care routine",
+        "pre shower routine", "gua sha routine", "lymph drainage face massage",
+        # Broad beauty intent
+        "makeup tips", "natural makeup", "clean makeup", "esthetician tips",
+        "beauty routine", "self care routine", "spa day at home",
     ],
     "nasalfresh_md": [
         "nasal rinse", "sinus rinse", "neti pot alternative",
@@ -124,6 +220,32 @@ KEYWORD_SEEDS = {
     "spa_sciences": [
         "facial cleansing brush", "microcurrent device", "LED face mask",
         "at-home spa treatment", "skincare device",
+    ],
+}
+
+# ── Interest seeds for broad targeting ───────────────────────────────────────
+# Replace string values with Pinterest interest taxonomy IDs from:
+# Ads Manager → Targeting → Interests → Browse categories
+# Leave empty list to skip interest targeting (falls back to keyword-only).
+INTEREST_SEEDS = {
+    "michael_todd_beauty": [],   # e.g. ["903"(Beauty), "906"(Skin care), ...]
+    "nasalfresh_md":       [],
+    "spa_sciences":        [],
+}
+
+# ── Brand campaign keywords (used by seeder to detect brand from campaign name) ─
+# Any campaign whose name (lowercased) contains one of these terms is assigned
+# to the matching brand.  Order matters — first match wins.
+BRAND_CAMPAIGN_KEYWORDS = {
+    "nasalfresh_md":       ["nasalfresh", "nasal fresh", "nasal", "sinus"],
+    "spa_sciences":        ["spa sciences", "spa_sciences", "spasciences"],
+    # MTB has many campaign styles — list creator names and product terms
+    "michael_todd_beauty": [
+        "sonicsmooth", "sonic smooth", "sonic", "beauty", "dermaplaning",
+        "petite", "michael todd", "mtb", "kelly", "cheryl", "caroline",
+        "nina", "abbie", "sara", "lillian", "oasis", "actalike", "kw only",
+        "performance_plus", "performance plus", "retargeting", "prospecting",
+        "conversion", "creative", "catalog", "trending", "weekly trends",
     ],
 }
 
@@ -145,7 +267,7 @@ DAYPART_MIN_DATA_POINTS    = 200
 DAYPART_ROLLING_DAYS       = 14
 
 # ── Monthly challenger ────────────────────────────────────────────────────────
-CHALLENGER_BUDGET_USD      = 300
+CHALLENGER_BUDGET_USD      = CAMPAIGN_BUDGETS["challenger"]
 CHALLENGER_DURATION_DAYS   = 30
 
 # ── Claude model ─────────────────────────────────────────────────────────────
