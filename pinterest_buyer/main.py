@@ -29,7 +29,9 @@ from intelligence import (
     graduation_engine,
     ad_pause_auditor,
     campaign_launcher,
+    fatigue_detector,
 )
+from connectors import pinterest_connector as pinterest
 from agents import anomaly_agent, narrative_agent, opportunity_agent
 from notifications import slack
 
@@ -61,6 +63,168 @@ def _is_monday() -> bool:
 def _is_first_monday() -> bool:
     now = datetime.now(_TZ)
     return now.weekday() == 0 and now.day <= 7
+
+
+# ── Campaign seeding ──────────────────────────────────────────────────────────
+
+def seed_existing_campaigns() -> None:
+    """
+    Discover existing Pinterest campaigns and mirror them into campaign_log.
+
+    Called on first run (--seed) so the budget engine can manage campaigns
+    that were created before PAMBS existed.  Safe to call repeatedly — uses
+    upsert so existing records are not overwritten.
+
+    Name convention assumed (matches campaign_launcher naming):
+      "{brand} — Scale: {Actalike|Pplus|Broad|Keyword}"
+      "{brand} — Discovery …"
+      "{brand} — P+ Challenger …"
+    """
+    from datetime import date as _date
+    log.info("Seeding existing Pinterest campaigns from API...")
+
+    # Map display names used in campaign names → internal campaign_type keys
+    _type_hints = {
+        "actalike":   "scale_actalike",
+        "pplus":      "scale_pplus",
+        "p+":         "scale_pplus",
+        "broad":      "scale_broad",
+        "keyword":    "scale_keyword",
+        "discovery":  "discovery",
+        "challenger": "scale_pplus",
+    }
+
+    try:
+        campaigns = pinterest.list_campaigns()
+    except Exception as exc:
+        log.error("Failed to fetch campaigns from Pinterest: %s", exc)
+        return
+
+    seeded = 0
+    for c in campaigns:
+        name_lower = c.get("name", "").lower()
+        campaign_id = c["id"]
+
+        # Identify brand
+        brand = next(
+            (b for b in config.BRANDS if b.replace("_", " ") in name_lower or b in name_lower),
+            None,
+        )
+        if not brand:
+            log.debug("Skipping unknown brand campaign: %s", c.get("name"))
+            continue
+
+        # Identify campaign_type
+        ctype = next(
+            (v for k, v in _type_hints.items() if k in name_lower),
+            "discovery",
+        )
+
+        status = "active" if c.get("status") == "ACTIVE" else "paused"
+        budget_micro = c.get("daily_spend_cap") or 0
+        budget_usd   = budget_micro / 1_000_000
+
+        db.upsert_campaign(
+            {
+                "campaign_id":           campaign_id,
+                "brand":                 brand,
+                "campaign_type":         ctype,
+                "pinterest_campaign_id": campaign_id,
+                "status":                status,
+                "budget_usd":            budget_usd or config.SCALE_CAMPAIGN_BUDGET_USD,
+                "launch_date":           _date.today().isoformat(),
+                "is_challenger":         1 if "challenger" in name_lower else 0,
+            }
+        )
+        log.info("Seeded: %s → brand=%s type=%s status=%s $%.0f/day",
+                 c.get("name"), brand, ctype, status, budget_usd)
+        seeded += 1
+
+    log.info("Seeding complete: %d campaigns mirrored.", seeded)
+
+
+# ── Daypart + keyword ingestion ───────────────────────────────────────────────
+
+def _ingest_daypart_and_keywords() -> None:
+    """
+    Fetch yesterday's HOUR-granularity and keyword analytics from Pinterest
+    and persist them for the fatigue detector and opportunity agent.
+    Runs as part of the daily 3 AM job after budget optimization.
+    """
+    from datetime import date as _date, timedelta as _td
+    yesterday = (_date.today() - _td(days=1)).isoformat()
+
+    all_campaigns = db.get_active_campaigns()
+    if not all_campaigns:
+        return
+
+    # ── Daypart ingestion ─────────────────────────────────────────────────────
+    all_pin_ids = [
+        c.get("pinterest_campaign_id") or c["campaign_id"]
+        for c in all_campaigns
+    ]
+
+    try:
+        hourly_rows = pinterest.get_hourly_campaign_analytics(all_pin_ids, yesterday)
+    except Exception as exc:
+        log.warning("Hourly analytics fetch failed: %s", exc)
+        hourly_rows = []
+
+    # Aggregate by (brand, hour)
+    brand_hourly: dict[str, dict[int, dict]] = {}
+    pin_to_brand  = {
+        (c.get("pinterest_campaign_id") or c["campaign_id"]): c["brand"]
+        for c in all_campaigns
+    }
+    for row in hourly_rows:
+        brand = pin_to_brand.get(row["campaign_id"])
+        if not brand:
+            continue
+        h = row["hour_utc"]
+        brand_hourly.setdefault(brand, {}).setdefault(h, {"spend_usd": 0.0, "revenue_usd": 0.0})
+        brand_hourly[brand][h]["spend_usd"]   += row["spend"]
+        brand_hourly[brand][h]["revenue_usd"] += row["revenue"]
+
+    for brand, hours in brand_hourly.items():
+        hourly_list = [{"hour_utc": h, **v} for h, v in hours.items()]
+        fatigue_detector.ingest_daypart_data(brand, hourly_list)
+        log.info("[%s] Ingested daypart data for %d hours.", brand, len(hourly_list))
+
+    # ── Keyword ingestion ─────────────────────────────────────────────────────
+    # Only pull from keyword-type campaigns (they have actual keyword targeting)
+    kw_campaigns = [c for c in all_campaigns if c["campaign_type"] in ("scale_keyword", "scale_broad")]
+    if not kw_campaigns:
+        return
+
+    from datetime import date as _date2, timedelta as _td2
+    start = (_date2.today() - _td2(days=1)).isoformat()
+
+    for camp in kw_campaigns:
+        brand       = camp["brand"]
+        pin_camp_id = camp.get("pinterest_campaign_id") or camp["campaign_id"]
+        try:
+            ads = pinterest.list_ads_in_campaign(pin_camp_id)
+            ad_ids = [a["id"] for a in ads if a.get("status") == "ACTIVE"]
+            if not ad_ids:
+                continue
+            kw_rows = pinterest.get_keyword_analytics(ad_ids, start, yesterday)
+            for kw in kw_rows:
+                db.upsert_keyword_performance(
+                    {
+                        "brand":       brand,
+                        "keyword":     kw["keyword"],
+                        "impressions": kw["impressions"],
+                        "clicks":      kw["clicks"],
+                        "conversions": kw["conversions"],
+                        "spend_usd":   kw["spend"],
+                        "revenue_usd": kw["revenue"],
+                        "roas":        kw["roas"],
+                    }
+                )
+            log.info("[%s] Ingested %d keyword rows.", brand, len(kw_rows))
+        except Exception as exc:
+            log.warning("[%s] Keyword ingestion failed for campaign %s: %s",
+                        brand, pin_camp_id, exc)
 
 
 # ── Core daily run ────────────────────────────────────────────────────────────
@@ -137,7 +301,14 @@ def daily_run() -> None:
     except Exception as exc:
         log.error("Ad pause audit failed: %s", exc)
 
-    # Step 7: AI agent — anomaly detection
+    # Step 7: Daypart + keyword ingestion (feeds fatigue detector & opportunity agent)
+    log.info("Ingesting daypart and keyword data...")
+    try:
+        _ingest_daypart_and_keywords()
+    except Exception as exc:
+        log.error("Daypart/keyword ingestion failed: %s", exc)
+
+    # Step 8: AI agent — anomaly detection
     log.info("Running anomaly detection agent...")
     anomaly_result: dict = {"anomalies": [], "summary": ""}
     try:
@@ -145,7 +316,7 @@ def daily_run() -> None:
     except Exception as exc:
         log.error("Anomaly detection failed: %s", exc)
 
-    # Step 8 (Mondays): Opportunity agent
+    # Step 9 (Mondays): Opportunity agent
     if _is_monday():
         log.info("Monday — running opportunity agent...")
         try:
@@ -208,12 +379,22 @@ def main() -> None:
         action="store_true",
         help="Only post the morning digest (requires a prior --once run).",
     )
+    parser.add_argument(
+        "--seed",
+        action="store_true",
+        help="Discover existing Pinterest campaigns and seed them into campaign_log, then exit.",
+    )
     args = parser.parse_args()
 
     log.info("Initialising database...")
     db.init_db()
 
+    if args.seed:
+        seed_existing_campaigns()
+        return
+
     if args.once:
+        seed_existing_campaigns()   # safe to call every time — upserts only
         daily_run()
         post_morning_digest()
         return

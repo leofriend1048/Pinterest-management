@@ -104,6 +104,13 @@ TARGET_ROAS = {
     "spa_sciences":        2.5,
 }
 
+# ── Brand landing pages (used as click-through URL for every ad) ─────────────
+BRAND_LANDING_URLS = {
+    "michael_todd_beauty": "https://www.michaeltoddbeauty.com",
+    "nasalfresh_md":       "https://www.nasalfreshmd.com",
+    "spa_sciences":        "https://www.spasciences.com",
+}
+
 # ── Keyword seeds ─────────────────────────────────────────────────────────────
 KEYWORD_SEEDS = {
     "michael_todd_beauty": [

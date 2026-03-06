@@ -367,9 +367,120 @@ def list_ads_in_campaign(campaign_id: str) -> list[dict]:
 
 
 def list_campaigns() -> list[dict]:
+    """Return all campaigns (handles pagination)."""
+    items: list[dict] = []
+    params: dict = {"page_size": 250}
+    while True:
+        resp = _req(
+            "GET",
+            f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/campaigns",
+            params=params,
+        )
+        items.extend(resp.get("items", []))
+        bookmark = resp.get("bookmark")
+        if not bookmark:
+            break
+        params["bookmark"] = bookmark
+    return items
+
+
+def get_hourly_campaign_analytics(
+    campaign_ids: list[str],
+    date_str: str,
+) -> list[dict]:
+    """
+    Fetch HOUR-granularity analytics for a single day (for dayparting).
+
+    Pinterest HOUR granularity constraints:
+      - max 8 days back
+      - max 3-day range (use a single date for one day)
+
+    Returns list of {campaign_id, hour_utc, spend, revenue}.
+    """
+    ids_param = ",".join(campaign_ids)
     resp = _req(
         "GET",
-        f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/campaigns",
-        params={"page_size": 250},
+        f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/campaigns/analytics",
+        params={
+            "campaign_ids":      ids_param,
+            "start_date":        date_str,
+            "end_date":          date_str,
+            "columns":           "CAMPAIGN_ID,SPEND_IN_DOLLAR,TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR",
+            "granularity":       "HOUR",
+            "click_window_days": 1,
+            "view_window_days":  1,
+        },
     )
-    return resp.get("items", [])
+    results = []
+    for row in resp if isinstance(resp, list) else []:
+        spend   = float(row.get("SPEND_IN_DOLLAR", 0) or 0)
+        revenue = float(row.get("TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR", 0) or 0) / 1_000_000
+        # DATE field from HOUR granularity is "YYYY-MM-DD HH:MM:SS" — extract hour
+        date_field = row.get("DATE", "")
+        try:
+            hour_utc = int(date_field[11:13]) if len(date_field) >= 13 else 0
+        except (ValueError, IndexError):
+            hour_utc = 0
+        results.append(
+            {
+                "campaign_id": row.get("CAMPAIGN_ID"),
+                "hour_utc":    hour_utc,
+                "spend":       spend,
+                "revenue":     revenue,
+            }
+        )
+    return results
+
+
+def get_keyword_analytics(
+    ad_ids: list[str],
+    start_date: str,
+    end_date: str,
+) -> list[dict]:
+    """
+    Fetch keyword-level targeting analytics for a list of ads.
+    Uses the targeting_analytics endpoint with targeting_types=KEYWORD.
+
+    Returns list of {keyword, spend, impressions, clicks, conversions, revenue}.
+    """
+    results: list[dict] = []
+    for ad_id in ad_ids:
+        try:
+            resp = _req(
+                "GET",
+                f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/ads/{ad_id}/targeting_analytics",
+                params={
+                    "start_date":      start_date,
+                    "end_date":        end_date,
+                    "targeting_types": "KEYWORD",
+                    "columns":         (
+                        "SPEND_IN_DOLLAR,TOTAL_CONVERSIONS,"
+                        "TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR,"
+                        "PAID_IMPRESSION,CLICKTHROUGH_1"
+                    ),
+                    "granularity":     "TOTAL",
+                },
+            )
+            for row in resp.get("data", []) if isinstance(resp, dict) else []:
+                kw = (row.get("targeting_value") or "").strip()
+                if not kw:
+                    continue
+                spend       = float(row.get("SPEND_IN_DOLLAR", 0) or 0)
+                revenue     = float(row.get("TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR", 0) or 0) / 1_000_000
+                imps        = int(row.get("PAID_IMPRESSION", 0) or 0)
+                clicks      = int(row.get("CLICKTHROUGH_1", 0) or 0)
+                conversions = int(row.get("TOTAL_CONVERSIONS", 0) or 0)
+                results.append(
+                    {
+                        "keyword":     kw,
+                        "spend":       spend,
+                        "revenue":     revenue,
+                        "impressions": imps,
+                        "clicks":      clicks,
+                        "conversions": conversions,
+                        "roas":        revenue / spend if spend else 0.0,
+                    }
+                )
+        except Exception as exc:
+            log.warning("Keyword analytics failed for ad %s: %s", ad_id, exc)
+    return results

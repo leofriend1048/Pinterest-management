@@ -129,6 +129,7 @@ def launch_weekly_discovery(brand: str) -> str | None:
     )
 
     # Upload each creative and create ads
+    landing_url = config.BRAND_LANDING_URLS.get(brand, "https://example.com")
     for c in creatives:
         media_id = _upload_creative(c)
         if not media_id:
@@ -137,6 +138,7 @@ def launch_weekly_discovery(brand: str) -> str | None:
             ad_group_id=ad_group_id,
             name=c.get("name", c["meta_creative_id"]),
             media_id=media_id,
+            link=landing_url,
         )
         db.set_creative_pin_id(c["meta_creative_id"], "discovery", ad_id)
 
