@@ -10,10 +10,13 @@ PINTEREST_AD_ACCOUNT_ID = os.environ["PINTEREST_AD_ACCOUNT_ID"]
 META_ACCESS_TOKEN  = os.environ["META_ACCESS_TOKEN"]
 META_AD_ACCOUNT_ID = os.environ["META_AD_ACCOUNT_ID"]
 
-NORTHBEAM_API_KEY = os.environ["NORTHBEAM_API_KEY"]
-NORTHBEAM_ORG_ID  = os.environ["NORTHBEAM_ORG_ID"]
+NORTHBEAM_API_KEY   = os.environ["NORTHBEAM_API_KEY"]
+NORTHBEAM_CLIENT_ID = os.environ["NORTHBEAM_CLIENT_ID"]
 
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
+
+# Optional: if set, enables ROAS-optimised bidding on ad groups
+PINTEREST_CONVERSION_TAG_ID = os.getenv("PINTEREST_CONVERSION_TAG_ID", "")
 
 SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 SLACK_CHANNEL   = os.getenv("SLACK_CHANNEL", "#pinterest-automated")

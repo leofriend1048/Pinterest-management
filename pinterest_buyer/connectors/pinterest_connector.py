@@ -158,18 +158,24 @@ def create_ad_group(
     daily_budget_usd: float | None = None,
 ) -> str:
     body: dict[str, Any] = {
-        "campaign_id":      campaign_id,
-        "name":             name,
-        "billable_event":   "IMPRESSION",
-        "targeting_spec":   targeting_spec,
-        "status":           "ACTIVE",
-        "ad_account_id":    config.PINTEREST_AD_ACCOUNT_ID,
-        "optimization_goal_metadata": {
-            "conversion_tag_v3_goal_metadata": {"attribution_windows": {"click_window_days": 30}},
-            "frequency_goal_metadata": {},
-            "scrollup_goal_metadata": {},
-        },
+        "campaign_id":    campaign_id,
+        "name":           name,
+        "billable_event": "CLICKTHROUGH",
+        "targeting_spec": targeting_spec,
+        "status":         "ACTIVE",
+        "ad_account_id":  config.PINTEREST_AD_ACCOUNT_ID,
+        "bid_strategy_type": "AUTOMATIC_BID",
     }
+    # Attach ROAS-optimised goal if a conversion tag is configured
+    if config.PINTEREST_CONVERSION_TAG_ID:
+        body["optimization_goal_metadata"] = {
+            "conversion_tag_v3_goal_metadata": {
+                "conversion_event":   "checkout",
+                "conversion_tag_id":  config.PINTEREST_CONVERSION_TAG_ID,
+                "is_roas_optimized":  True,
+                "learning_mode_type": "ACTIVE",
+            }
+        }
     if daily_budget_usd:
         body["daily_spend_cap"] = int(daily_budget_usd * 1_000_000)
 
@@ -210,7 +216,7 @@ def create_ad(
     resp = _req(
         "POST",
         f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/ads",
-        json=body,
+        json=[body],   # API expects an array
     )
     ad_id = resp["items"][0]["id"]
     log.info("Pinterest: created ad '%s' id=%s in ad_group=%s", name, ad_id, ad_group_id)
@@ -248,38 +254,43 @@ def get_campaign_analytics(
     Fetch campaign-level analytics.
 
     Returns list of {campaign_id, spend, impressions, clicks, ctr, ...}.
+    Attribution windows match Northbeam: 1-day click + 1-day view.
     """
     ids_param = ",".join(campaign_ids)
     resp = _req(
         "GET",
         f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/campaigns/analytics",
         params={
-            "campaign_ids": ids_param,
-            "start_date":   start_date,
-            "end_date":     end_date,
-            "columns":      (
-                "SPEND_IN_DOLLAR,TOTAL_CONVERSIONS,TOTAL_CONVERSION_VALUE_IN_MICRO_DOLLAR,"
-                "IMPRESSION_1,CLICK_1,INAPP_CHECKOUT_COST_PER_ACTION,"
-                "VIDEO_3SEC_VIEWS_2,VIDEO_START_2,ECPM_IN_MICRO_DOLLAR"
+            "campaign_ids":        ids_param,
+            "start_date":          start_date,
+            "end_date":            end_date,
+            "columns":             (
+                "CAMPAIGN_ID,SPEND_IN_DOLLAR,TOTAL_CONVERSIONS,"
+                "TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR,WEB_CHECKOUT_ROAS,"
+                "PAID_IMPRESSION,CLICKTHROUGH_1,"
+                "VIDEO_3SEC_VIEWS_2,VIDEO_P0_COMBINED_2"
             ),
-            "granularity":  "TOTAL",
+            "granularity":         "TOTAL",
+            "click_window_days":   1,
+            "view_window_days":    1,
         },
     )
     results = []
     for row in resp if isinstance(resp, list) else []:
-        spend     = float(row.get("SPEND_IN_DOLLAR", 0) or 0)
-        revenue   = float(row.get("TOTAL_CONVERSION_VALUE_IN_MICRO_DOLLAR", 0) or 0) / 1_000_000
-        imps      = int(row.get("IMPRESSION_1", 0) or 0)
-        clicks    = int(row.get("CLICK_1", 0) or 0)
+        spend       = float(row.get("SPEND_IN_DOLLAR", 0) or 0)
+        revenue     = float(row.get("TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR", 0) or 0) / 1_000_000
+        roas        = float(row.get("WEB_CHECKOUT_ROAS", 0) or 0) or (revenue / spend if spend else 0.0)
+        imps        = int(row.get("PAID_IMPRESSION", 0) or 0)
+        clicks      = int(row.get("CLICKTHROUGH_1", 0) or 0)
         conversions = int(row.get("TOTAL_CONVERSIONS", 0) or 0)
-        plays_3s  = int(row.get("VIDEO_3SEC_VIEWS_2", 0) or 0)
-        plays_all = int(row.get("VIDEO_START_2", 0) or 0)
+        plays_3s    = int(row.get("VIDEO_3SEC_VIEWS_2", 0) or 0)
+        plays_all   = int(row.get("VIDEO_P0_COMBINED_2", 0) or 0)
         results.append(
             {
-                "campaign_id": row.get("campaign_id"),
+                "campaign_id": row.get("CAMPAIGN_ID"),
                 "spend":       spend,
                 "revenue":     revenue,
-                "roas":        revenue / spend if spend else 0.0,
+                "roas":        roas,
                 "impressions": imps,
                 "clicks":      clicks,
                 "ctr":         clicks / imps if imps else 0.0,
@@ -292,46 +303,47 @@ def get_campaign_analytics(
 
 
 def get_ad_analytics(
-    ad_group_ids: list[str],
+    ad_ids: list[str],
     start_date: str,
     end_date: str,
 ) -> list[dict]:
     """Fetch ad-level analytics for frequency + ROAS decay checks."""
-    ids_param = ",".join(ad_group_ids)
+    ids_param = ",".join(ad_ids)
     resp = _req(
         "GET",
         f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/ads/analytics",
         params={
-            "ad_ids":    ids_param,
-            "start_date": start_date,
-            "end_date":   end_date,
-            "columns": (
-                "SPEND_IN_DOLLAR,TOTAL_CONVERSIONS,TOTAL_CONVERSION_VALUE_IN_MICRO_DOLLAR,"
-                "IMPRESSION_1,CLICK_1,TOTAL_ENGAGEMENT,VIDEO_3SEC_VIEWS_2,VIDEO_START_2"
+            "ad_ids":            ids_param,
+            "start_date":        start_date,
+            "end_date":          end_date,
+            "columns":           (
+                "AD_ID,SPEND_IN_DOLLAR,TOTAL_CONVERSIONS,"
+                "TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR,WEB_CHECKOUT_ROAS,"
+                "PAID_IMPRESSION,CLICKTHROUGH_1,FREQUENCY,"
+                "VIDEO_3SEC_VIEWS_2,VIDEO_P0_COMBINED_2"
             ),
-            "granularity": "TOTAL",
+            "granularity":       "TOTAL",
+            "click_window_days": 1,
+            "view_window_days":  1,
         },
     )
     results = []
     for row in resp if isinstance(resp, list) else []:
-        spend     = float(row.get("SPEND_IN_DOLLAR", 0) or 0)
-        revenue   = float(row.get("TOTAL_CONVERSION_VALUE_IN_MICRO_DOLLAR", 0) or 0) / 1_000_000
-        imps      = int(row.get("IMPRESSION_1", 0) or 0)
-        clicks    = int(row.get("CLICK_1", 0) or 0)
+        spend       = float(row.get("SPEND_IN_DOLLAR", 0) or 0)
+        revenue     = float(row.get("TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR", 0) or 0) / 1_000_000
+        roas        = float(row.get("WEB_CHECKOUT_ROAS", 0) or 0) or (revenue / spend if spend else 0.0)
+        imps        = int(row.get("PAID_IMPRESSION", 0) or 0)
+        clicks      = int(row.get("CLICKTHROUGH_1", 0) or 0)
         conversions = int(row.get("TOTAL_CONVERSIONS", 0) or 0)
-        plays_3s  = int(row.get("VIDEO_3SEC_VIEWS_2", 0) or 0)
-        plays_all = int(row.get("VIDEO_START_2", 0) or 0)
-
-        # Pinterest doesn't expose frequency directly; approximate via TOTAL_ENGAGEMENT/impressions
-        engagements = int(row.get("TOTAL_ENGAGEMENT", 0) or 0)
-        frequency   = engagements / imps if imps else 0.0
-
+        frequency   = float(row.get("FREQUENCY", 0) or 0)
+        plays_3s    = int(row.get("VIDEO_3SEC_VIEWS_2", 0) or 0)
+        plays_all   = int(row.get("VIDEO_P0_COMBINED_2", 0) or 0)
         results.append(
             {
-                "ad_id":       row.get("ad_id"),
+                "ad_id":       row.get("AD_ID"),
                 "spend":       spend,
                 "revenue":     revenue,
-                "roas":        revenue / spend if spend else 0.0,
+                "roas":        roas,
                 "impressions": imps,
                 "clicks":      clicks,
                 "ctr":         clicks / imps if imps else 0.0,

@@ -329,14 +329,15 @@ PINTEREST_AD_ACCOUNT_ID     Pinterest ad account ID
 META_ACCESS_TOKEN           Meta long-lived system user token (ads_read scope)
 META_AD_ACCOUNT_ID          Meta ad account ID (format: act_123456789)
 
-NORTHBEAM_API_KEY           Northbeam API key
-NORTHBEAM_ORG_ID            Northbeam org ID
+NORTHBEAM_API_KEY           Northbeam API key (used as HTTP Basic username)
+NORTHBEAM_CLIENT_ID         Northbeam client ID (Data-Client-ID header)
 
 ANTHROPIC_API_KEY           Claude API key (for all three agents)
 
 SLACK_BOT_TOKEN             Slack bot token (xoxb-...)
 SLACK_CHANNEL               Target channel (default: #pinterest-automated)
 
+PINTEREST_CONVERSION_TAG_ID Pinterest conversion tag ID — enables ROAS-optimised bidding on ad groups (optional)
 SHADOW_MODE                 true = log only, no Pinterest writes (default: false)
 LOG_LEVEL                   INFO or DEBUG (default: INFO)
 DB_PATH                     Path to SQLite file (default: pinterest_buyer/state/pambs.db)
@@ -346,8 +347,10 @@ DB_PATH                     Path to SQLite file (default: pinterest_buyer/state/
 
 ## Known Northbeam dependency (confirm before Phase 1)
 
-Three things to verify with Northbeam CSM before the system goes live:
+Three things to confirm with Northbeam CSM before go-live:
 
-1. **API endpoint availability** for platform-filtered ROAS (Pinterest channel specifically)
-2. **Data freshness** — T+1 or T+0? The system assumes T+1 (yesterday is the most recent complete day)
-3. **Creative-level attribution** via API — if not available at this org tier, budget decisions fall back to Meta platform ROAS automatically (the fallback is already wired)
+1. **Professional plan / API access enabled** — the Data Export API (`POST /v1/exports/data-export`) is a paid add-on. Confirm it's active for the account.
+2. **`Data-Client-ID` value** — required header alongside the API key. Find it in the Northbeam dashboard under API settings. Set as `NORTHBEAM_CLIENT_ID` env var.
+3. **Attribution model ID** — the system auto-discovers the account's available models via `GET /v1/exports/attribution-models` on first run and prefers a clicks+views model. No manual action needed, but confirm with CSM that a clicks+views model is provisioned.
+
+**Attribution settings locked in:** 1-day window, accrual accounting, clicks+views model. This matches the `1-day clicks + views accrual` setting Leo specified.
