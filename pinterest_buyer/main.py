@@ -357,12 +357,15 @@ def post_morning_digest() -> None:
         slack.post_morning_digest(digest_text)
     except Exception as exc:
         log.error("Morning digest failed: %s", exc)
-        slack.post_morning_digest(
-            f"⚠️ Digest generation failed: {exc}\n\n"
-            f"Graduations: {len(_digest_payload['graduation_events'])}, "
-            f"Budget changes: {len([d for d in _digest_payload['budget_decisions'] if d.get('action') != 'hold'])}, "
-            f"Ads paused: {len(_digest_payload['paused_ads'])}"
-        )
+        try:
+            slack.post_morning_digest(
+                f"⚠️ Digest generation failed: {exc}\n\n"
+                f"Graduations: {len(_digest_payload['graduation_events'])}, "
+                f"Budget changes: {len([d for d in _digest_payload['budget_decisions'] if d.get('action') != 'hold'])}, "
+                f"Ads paused: {len(_digest_payload['paused_ads'])}"
+            )
+        except Exception:
+            log.error("Slack fallback post also failed — digest not delivered.")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
