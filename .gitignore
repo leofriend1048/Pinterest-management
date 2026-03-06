@@ -1,0 +1,14 @@
+.env
+*.db
+*.db-wal
+*.db-shm
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+/tmp/pambs_assets/
+pinterest_buyer/logs/*.log

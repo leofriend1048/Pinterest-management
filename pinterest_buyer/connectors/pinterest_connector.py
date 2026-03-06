@@ -1,0 +1,363 @@
+"""
+Pinterest Marketing API connector.
+
+Responsibilities
+----------------
+- Asset upload (image or video)
+- Campaign / ad group / ad creation
+- Ad-level pause / resume
+- Campaign budget PATCH
+- Campaign and ad-level performance pulls
+
+Rate limit: 1,000 req/hour — well within usage for 15 campaigns.
+
+API reference: https://developers.pinterest.com/docs/api/v5/
+"""
+
+import logging
+import time
+from pathlib import Path
+from typing import Any
+
+import requests
+
+import config
+
+log = logging.getLogger(__name__)
+
+_BASE     = "https://api.pinterest.com/v5"
+_TIMEOUT  = 30
+_RETRY_ON = {429, 500, 502, 503, 504}
+
+
+def _headers() -> dict:
+    return {
+        "Authorization": f"Bearer {config.PINTEREST_ACCESS_TOKEN}",
+        "Content-Type":  "application/json",
+    }
+
+
+def _req(method: str, path: str, **kwargs) -> dict:
+    url = f"{_BASE}{path}"
+    for attempt in range(4):
+        resp = requests.request(method, url, headers=_headers(), timeout=_TIMEOUT, **kwargs)
+        if resp.status_code == 429:
+            wait = int(resp.headers.get("Retry-After", 60))
+            log.warning("Pinterest rate-limited — sleeping %ds", wait)
+            time.sleep(wait)
+            continue
+        if resp.status_code in _RETRY_ON and attempt < 3:
+            time.sleep(2 ** attempt)
+            continue
+        resp.raise_for_status()
+        return resp.json() if resp.content else {}
+    raise RuntimeError(f"Pinterest API request failed after 4 attempts: {method} {path}")
+
+
+# ── Asset upload ──────────────────────────────────────────────────────────────
+
+def upload_image(local_path: str) -> str:
+    """Upload an image file and return the media_id."""
+    register = _req(
+        "POST", f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/media",
+        json={"media_type": "image"},
+    )
+    upload_url  = register["upload_url"]
+    upload_params = register.get("upload_parameters", {})
+    media_id    = register["media_id"]
+
+    with open(local_path, "rb") as fh:
+        fields = {k: (None, v) for k, v in upload_params.items()}
+        fields["file"] = (Path(local_path).name, fh, "image/jpeg")
+        resp = requests.post(upload_url, files=fields, timeout=120)
+        resp.raise_for_status()
+
+    log.info("Pinterest: uploaded image %s → media_id=%s", local_path, media_id)
+    return media_id
+
+
+def upload_video(local_path: str) -> str:
+    """Register + upload a video and return the media_id (polls until ready)."""
+    register = _req(
+        "POST", f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/media",
+        json={"media_type": "video"},
+    )
+    upload_url  = register["upload_url"]
+    upload_params = register.get("upload_parameters", {})
+    media_id    = register["media_id"]
+
+    with open(local_path, "rb") as fh:
+        fields = {k: (None, v) for k, v in upload_params.items()}
+        fields["file"] = (Path(local_path).name, fh, "video/mp4")
+        resp = requests.post(upload_url, files=fields, timeout=300)
+        resp.raise_for_status()
+
+    # Poll until processing completes (max 10 minutes)
+    for _ in range(60):
+        status = _req("GET", f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/media/{media_id}")
+        if status.get("status") == "succeeded":
+            break
+        if status.get("status") == "failed":
+            raise RuntimeError(f"Pinterest video processing failed: {media_id}")
+        time.sleep(10)
+
+    log.info("Pinterest: uploaded video %s → media_id=%s", local_path, media_id)
+    return media_id
+
+
+# ── Campaign management ───────────────────────────────────────────────────────
+
+def create_campaign(
+    name: str,
+    daily_budget_usd: float,
+    objective: str = "CATALOG_SALES",
+) -> str:
+    """Create a campaign and return its campaign_id."""
+    body = {
+        "name":           name,
+        "objective_type": objective,
+        "status":         "ACTIVE",
+        "daily_spend_cap": int(daily_budget_usd * 1_000_000),  # micro-USD
+        "ad_account_id":  config.PINTEREST_AD_ACCOUNT_ID,
+    }
+    resp = _req("POST", f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/campaigns", json=body)
+    campaign_id = resp["items"][0]["id"]
+    log.info("Pinterest: created campaign '%s' id=%s", name, campaign_id)
+    return campaign_id
+
+
+def update_campaign_budget(campaign_id: str, new_daily_budget_usd: float) -> None:
+    body = {
+        "id":             campaign_id,
+        "daily_spend_cap": int(new_daily_budget_usd * 1_000_000),
+    }
+    _req(
+        "PATCH",
+        f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/campaigns",
+        json={"campaigns": [body]},
+    )
+    log.info("Pinterest: updated campaign %s budget → $%.0f/day", campaign_id, new_daily_budget_usd)
+
+
+def pause_campaign(campaign_id: str) -> None:
+    body = {"id": campaign_id, "status": "PAUSED"}
+    _req(
+        "PATCH",
+        f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/campaigns",
+        json={"campaigns": [body]},
+    )
+    log.info("Pinterest: paused campaign %s", campaign_id)
+
+
+# ── Ad group management ───────────────────────────────────────────────────────
+
+def create_ad_group(
+    campaign_id: str,
+    name: str,
+    targeting_spec: dict,
+    daily_budget_usd: float | None = None,
+) -> str:
+    body: dict[str, Any] = {
+        "campaign_id":      campaign_id,
+        "name":             name,
+        "billable_event":   "IMPRESSION",
+        "targeting_spec":   targeting_spec,
+        "status":           "ACTIVE",
+        "ad_account_id":    config.PINTEREST_AD_ACCOUNT_ID,
+        "optimization_goal_metadata": {
+            "conversion_tag_v3_goal_metadata": {"attribution_windows": {"click_window_days": 30}},
+            "frequency_goal_metadata": {},
+            "scrollup_goal_metadata": {},
+        },
+    }
+    if daily_budget_usd:
+        body["daily_spend_cap"] = int(daily_budget_usd * 1_000_000)
+
+    resp = _req(
+        "POST",
+        f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/ad_groups",
+        json=body,
+    )
+    ad_group_id = resp["items"][0]["id"]
+    log.info("Pinterest: created ad group '%s' id=%s", name, ad_group_id)
+    return ad_group_id
+
+
+# ── Ad management ─────────────────────────────────────────────────────────────
+
+def create_ad(
+    ad_group_id: str,
+    name: str,
+    pin_id: str | None = None,
+    media_id: str | None = None,
+    link: str = "https://example.com",
+) -> str:
+    """Create an ad within an ad group. Returns ad_id."""
+    creative: dict[str, Any] = {"ad_account_id": config.PINTEREST_AD_ACCOUNT_ID}
+    if pin_id:
+        creative["pin_id"] = pin_id
+    elif media_id:
+        creative["media_id"] = media_id
+
+    body = {
+        "ad_group_id":  ad_group_id,
+        "creative_type": "REGULAR",
+        "name":          name,
+        "status":        "ACTIVE",
+        "link":          link,
+        **creative,
+    }
+    resp = _req(
+        "POST",
+        f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/ads",
+        json=body,
+    )
+    ad_id = resp["items"][0]["id"]
+    log.info("Pinterest: created ad '%s' id=%s in ad_group=%s", name, ad_id, ad_group_id)
+    return ad_id
+
+
+def pause_ad(ad_id: str) -> None:
+    body = {"id": ad_id, "status": "PAUSED"}
+    _req(
+        "PATCH",
+        f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/ads",
+        json={"ads": [body]},
+    )
+    log.info("Pinterest: paused ad %s", ad_id)
+
+
+def resume_ad(ad_id: str) -> None:
+    body = {"id": ad_id, "status": "ACTIVE"}
+    _req(
+        "PATCH",
+        f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/ads",
+        json={"ads": [body]},
+    )
+    log.info("Pinterest: resumed ad %s", ad_id)
+
+
+# ── Performance data ──────────────────────────────────────────────────────────
+
+def get_campaign_analytics(
+    campaign_ids: list[str],
+    start_date: str,
+    end_date: str,
+) -> list[dict]:
+    """
+    Fetch campaign-level analytics.
+
+    Returns list of {campaign_id, spend, impressions, clicks, ctr, ...}.
+    """
+    ids_param = ",".join(campaign_ids)
+    resp = _req(
+        "GET",
+        f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/campaigns/analytics",
+        params={
+            "campaign_ids": ids_param,
+            "start_date":   start_date,
+            "end_date":     end_date,
+            "columns":      (
+                "SPEND_IN_DOLLAR,TOTAL_CONVERSIONS,TOTAL_CONVERSION_VALUE_IN_MICRO_DOLLAR,"
+                "IMPRESSION_1,CLICK_1,INAPP_CHECKOUT_COST_PER_ACTION,"
+                "VIDEO_3SEC_VIEWS_2,VIDEO_START_2,ECPM_IN_MICRO_DOLLAR"
+            ),
+            "granularity":  "TOTAL",
+        },
+    )
+    results = []
+    for row in resp if isinstance(resp, list) else []:
+        spend     = float(row.get("SPEND_IN_DOLLAR", 0) or 0)
+        revenue   = float(row.get("TOTAL_CONVERSION_VALUE_IN_MICRO_DOLLAR", 0) or 0) / 1_000_000
+        imps      = int(row.get("IMPRESSION_1", 0) or 0)
+        clicks    = int(row.get("CLICK_1", 0) or 0)
+        conversions = int(row.get("TOTAL_CONVERSIONS", 0) or 0)
+        plays_3s  = int(row.get("VIDEO_3SEC_VIEWS_2", 0) or 0)
+        plays_all = int(row.get("VIDEO_START_2", 0) or 0)
+        results.append(
+            {
+                "campaign_id": row.get("campaign_id"),
+                "spend":       spend,
+                "revenue":     revenue,
+                "roas":        revenue / spend if spend else 0.0,
+                "impressions": imps,
+                "clicks":      clicks,
+                "ctr":         clicks / imps if imps else 0.0,
+                "conversions": conversions,
+                "ncpa":        spend / conversions if conversions else 0.0,
+                "hook_rate":   plays_3s / plays_all if plays_all else 0.0,
+            }
+        )
+    return results
+
+
+def get_ad_analytics(
+    ad_group_ids: list[str],
+    start_date: str,
+    end_date: str,
+) -> list[dict]:
+    """Fetch ad-level analytics for frequency + ROAS decay checks."""
+    ids_param = ",".join(ad_group_ids)
+    resp = _req(
+        "GET",
+        f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/ads/analytics",
+        params={
+            "ad_ids":    ids_param,
+            "start_date": start_date,
+            "end_date":   end_date,
+            "columns": (
+                "SPEND_IN_DOLLAR,TOTAL_CONVERSIONS,TOTAL_CONVERSION_VALUE_IN_MICRO_DOLLAR,"
+                "IMPRESSION_1,CLICK_1,TOTAL_ENGAGEMENT,VIDEO_3SEC_VIEWS_2,VIDEO_START_2"
+            ),
+            "granularity": "TOTAL",
+        },
+    )
+    results = []
+    for row in resp if isinstance(resp, list) else []:
+        spend     = float(row.get("SPEND_IN_DOLLAR", 0) or 0)
+        revenue   = float(row.get("TOTAL_CONVERSION_VALUE_IN_MICRO_DOLLAR", 0) or 0) / 1_000_000
+        imps      = int(row.get("IMPRESSION_1", 0) or 0)
+        clicks    = int(row.get("CLICK_1", 0) or 0)
+        conversions = int(row.get("TOTAL_CONVERSIONS", 0) or 0)
+        plays_3s  = int(row.get("VIDEO_3SEC_VIEWS_2", 0) or 0)
+        plays_all = int(row.get("VIDEO_START_2", 0) or 0)
+
+        # Pinterest doesn't expose frequency directly; approximate via TOTAL_ENGAGEMENT/impressions
+        engagements = int(row.get("TOTAL_ENGAGEMENT", 0) or 0)
+        frequency   = engagements / imps if imps else 0.0
+
+        results.append(
+            {
+                "ad_id":       row.get("ad_id"),
+                "spend":       spend,
+                "revenue":     revenue,
+                "roas":        revenue / spend if spend else 0.0,
+                "impressions": imps,
+                "clicks":      clicks,
+                "ctr":         clicks / imps if imps else 0.0,
+                "conversions": conversions,
+                "ncpa":        spend / conversions if conversions else 0.0,
+                "frequency":   frequency,
+                "hook_rate":   plays_3s / plays_all if plays_all else 0.0,
+            }
+        )
+    return results
+
+
+def list_ads_in_campaign(campaign_id: str) -> list[dict]:
+    """Return all ads (id, name, status) within a campaign."""
+    resp = _req(
+        "GET",
+        f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/ads",
+        params={"campaign_ids": campaign_id, "page_size": 250},
+    )
+    return resp.get("items", [])
+
+
+def list_campaigns() -> list[dict]:
+    resp = _req(
+        "GET",
+        f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/campaigns",
+        params={"page_size": 250},
+    )
+    return resp.get("items", [])
