@@ -455,58 +455,53 @@ def _anthropic_ping() -> str:
 
 def debug_northbeam() -> None:
     """
-    Print the live Northbeam API catalogue: attribution models, available
-    metrics (with exact IDs), and breakdown keys/values.
-
-    Use after auth is confirmed to verify the exact metric IDs and breakdown
-    labels our connector should request.
+    Print the live Northbeam API catalogue and raw response shapes.
+    Shows attribution models, available metric IDs, and breakdown labels.
+    Prints the raw JSON for each endpoint so we can fix the connector if the
+    response structure doesn't match expectations.
     """
+    import json as _json
     import requests as _req
     from connectors import northbeam_connector as nb
 
     headers = nb._headers()
     base    = nb._BASE_URL
-    W = 64
+    W = 72
+
+    def _fetch(label: str, path: str):
+        print(f"\n  {label}:")
+        try:
+            r = _req.get(f"{base}{path}", headers=headers, timeout=15)
+            r.raise_for_status()
+            data = r.json()
+            print(f"    Raw response type: {type(data).__name__}")
+            print(f"    Raw (first 800 chars): {_json.dumps(data)[:800]}")
+            return data
+        except Exception as exc:
+            print(f"    ❌ {exc}")
+            return None
 
     print("\n" + "═" * W)
-    print("  Northbeam API Catalogue  (live from your account)")
+    print("  Northbeam API Catalogue  (live — raw responses shown for debugging)")
     print("═" * W)
 
-    print("\n  Attribution Models:")
-    try:
-        r = _req.get(f"{base}/v1/exports/attribution-models",
-                     headers=headers, timeout=15)
-        r.raise_for_status()
-        for m in r.json():
-            print(f"    id={m.get('id')!r:44s} name={m.get('name')!r}")
-    except Exception as exc:
-        print(f"    ❌ {exc}")
+    _fetch("Attribution Models", "/v1/exports/attribution-models")
+    _fetch("Available Metrics",  "/v1/exports/metrics")
 
-    print("\n  Available Metrics:")
-    try:
-        r = _req.get(f"{base}/v1/exports/metrics",
-                     headers=headers, timeout=15)
-        r.raise_for_status()
-        for m in r.json():
-            mid   = m.get("id", "")
-            label = m.get("label") or m.get("name") or ""
-            print(f"    id={mid!r:44s} label={label!r}")
-    except Exception as exc:
-        print(f"    ❌ {exc}")
-
-    print("\n  Breakdowns (Platform values):")
-    try:
-        r = _req.get(f"{base}/v1/exports/breakdowns",
-                     headers=headers, timeout=15)
-        r.raise_for_status()
-        for bd in r.json():
+    bd_data = _fetch("Breakdowns", "/v1/exports/breakdowns")
+    if bd_data:
+        print("\n  Platform breakdown values (parsed):")
+        items = bd_data if isinstance(bd_data, list) else (
+            bd_data.get("data") or bd_data.get("breakdowns") or []
+        )
+        for bd in items:
+            if not isinstance(bd, dict):
+                continue
             key = bd.get("key", "")
             if "platform" in key.lower():
                 print(f"    key={key!r}")
                 for v in bd.get("values", []):
                     print(f"      {v!r}")
-    except Exception as exc:
-        print(f"    ❌ {exc}")
 
     print("\n" + "═" * W + "\n")
 

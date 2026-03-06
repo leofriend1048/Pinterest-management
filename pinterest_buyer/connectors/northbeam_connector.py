@@ -81,18 +81,43 @@ def _get_attribution_model() -> str:
         timeout=_TIMEOUT,
     )
     resp.raise_for_status()
-    models: list[dict] = resp.json()
+    raw = resp.json()
+    log.debug("Northbeam attribution-models raw response: %s", raw)
 
-    if not models:
-        raise RuntimeError("Northbeam returned no attribution models for this account")
+    # Normalise to a flat list of model ID strings.
+    # API may return: list of strings, list of dicts, or a wrapped dict.
+    model_ids = _extract_model_ids(raw)
+    if not model_ids:
+        raise RuntimeError(
+            f"Northbeam returned no attribution models. Raw response: {raw}"
+        )
 
     preferred = next(
-        (m["id"] for m in models if "va" in m.get("id", "") or "view" in m.get("id", "").lower()),
-        models[0]["id"],
+        (m for m in model_ids if "va" in m or "view" in m.lower()),
+        model_ids[0],
     )
     _cached_model = preferred
     log.info("Northbeam: using attribution model '%s'", _cached_model)
     return _cached_model
+
+
+def _extract_model_ids(raw: Any) -> list[str]:
+    """Normalise the attribution-models API response to a flat list of ID strings."""
+    if isinstance(raw, list):
+        if raw and isinstance(raw[0], dict):
+            return [m.get("id", "") or m.get("model_id", "") for m in raw if m]
+        return [str(m) for m in raw if m]
+    if isinstance(raw, dict):
+        # Try common wrapper keys
+        inner = (
+            raw.get("data")
+            or raw.get("attribution_models")
+            or raw.get("results")
+            or raw.get("models")
+            or []
+        )
+        return _extract_model_ids(inner)
+    return []
 
 
 # ── Async job lifecycle ───────────────────────────────────────────────────────
