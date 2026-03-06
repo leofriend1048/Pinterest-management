@@ -160,6 +160,12 @@ def fetch_top_creatives(
     return creatives[:top_n]
 
 
+def ping() -> int:
+    """Lightweight auth check — returns count of ads returned from a 1-record probe."""
+    resp = _get(f"{config.META_AD_ACCOUNT_ID}/ads", {"limit": "1", "fields": "id"})
+    return len(resp.get("data", []))
+
+
 def download_asset(asset_url: str, creative_id: str, fmt: str) -> str:
     """
     Download a Meta asset to a local temp file.

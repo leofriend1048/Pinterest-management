@@ -18,8 +18,9 @@ ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 # Optional: if set, enables ROAS-optimised bidding on ad groups
 PINTEREST_CONVERSION_TAG_ID = os.getenv("PINTEREST_CONVERSION_TAG_ID", "")
 
-SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
+SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
 SLACK_CHANNEL   = os.getenv("SLACK_CHANNEL", "#pinterest-automated")
+SLACK_ENABLED   = os.getenv("SLACK_ENABLED", "true").lower() == "true" and bool(SLACK_BOT_TOKEN)
 
 DB_PATH     = os.getenv("DB_PATH", "pinterest_buyer/state/pambs.db")
 LOG_LEVEL   = os.getenv("LOG_LEVEL", "INFO")

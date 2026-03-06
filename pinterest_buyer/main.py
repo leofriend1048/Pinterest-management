@@ -9,8 +9,12 @@ Scheduler
 
 Usage
 -----
-  python -m pinterest_buyer.main          # start scheduler (production)
-  python -m pinterest_buyer.main --once   # run immediately once (testing)
+  python -m pinterest_buyer.main               # start scheduler (production / Cloud Run)
+  python -m pinterest_buyer.main --once        # run immediately once (testing)
+  python -m pinterest_buyer.main --test-apis   # connectivity check for all 4 APIs
+  python -m pinterest_buyer.main --clean-db    # wipe + reinitialise state DB
+  python -m pinterest_buyer.main --seed        # import existing Pinterest campaigns
+  python -m pinterest_buyer.main --digest-only # post morning digest (after --once run)
 """
 
 import argparse
@@ -389,6 +393,114 @@ def post_morning_digest() -> None:
             log.error("Slack fallback post also failed — digest not delivered.")
 
 
+# ── API connectivity check ────────────────────────────────────────────────────
+
+def test_apis() -> None:
+    """
+    Quick connectivity check for all 4 external APIs.
+    Exits with code 1 if any check fails — safe to call before deploying.
+    """
+    import sys
+    from connectors import northbeam_connector as northbeam
+    from connectors import meta_connector as meta
+
+    W = 60
+    results: list[tuple[str, bool, str]] = []
+
+    def _check(label: str, fn):
+        print(f"  Checking {label}...", flush=True)
+        try:
+            detail = fn()
+            results.append((label, True, str(detail)))
+        except Exception as exc:
+            results.append((label, False, str(exc)[:120]))
+
+    _check("Pinterest API",
+           lambda: f"{len(pinterest.list_campaigns())} campaigns found")
+    _check("Northbeam API",
+           lambda: f"attribution model = {northbeam.ping()}")
+    _check("Meta API",
+           lambda: f"ad account accessible ({meta.ping()} ad returned)")
+    _check("Anthropic API",
+           lambda: _anthropic_ping())
+
+    print("\n" + "═" * W)
+    print("  PAMBS API Connectivity Report")
+    print("═" * W)
+    all_pass = True
+    for name, ok, detail in results:
+        icon   = "✅" if ok else "❌"
+        status = "PASS" if ok else "FAIL"
+        print(f"  {icon}  {name:<16} {status}   {detail}")
+        if not ok:
+            all_pass = False
+    print("═" * W)
+    if all_pass:
+        print("  All APIs connected — safe to flip SHADOW_MODE=false and go live.\n")
+    else:
+        print("  Fix the failures above before deploying.\n")
+        sys.exit(1)
+
+
+def _anthropic_ping() -> str:
+    import anthropic
+    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    msg = client.messages.create(
+        model=config.CLAUDE_MODEL,
+        max_tokens=5,
+        messages=[{"role": "user", "content": "ping"}],
+    )
+    return f"model={config.CLAUDE_MODEL} ok (stop_reason={msg.stop_reason})"
+
+
+# ── DB reset ──────────────────────────────────────────────────────────────────
+
+def clean_db() -> None:
+    """Wipe the state DB and initialise a fresh schema. Prompts for confirmation."""
+    import os
+    db_path = config.DB_PATH
+    if os.path.exists(db_path):
+        confirm = input(
+            f"\n  ⚠️  This will DELETE {db_path} and ALL historical state.\n"
+            "  Type 'yes' to confirm: "
+        ).strip().lower()
+        if confirm != "yes":
+            print("  Aborted.")
+            return
+        os.remove(db_path)
+        log.info("Deleted %s", db_path)
+    db.init_db()
+    print(f"  ✅ Fresh database initialised at {db_path}")
+
+
+# ── Cloud Run health server ───────────────────────────────────────────────────
+
+def _start_health_server() -> None:
+    """
+    Minimal HTTP server on $PORT (default 8080) for Cloud Run health checks.
+    Responds 200 OK to any GET. Runs in a background daemon thread.
+    Harmless when running locally (simply listens and waits).
+    """
+    import os
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+
+        def log_message(self, *args):
+            pass  # suppress per-request noise
+
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    log.info("Health server listening on :%d  (Cloud Run ready)", port)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -408,10 +520,29 @@ def main() -> None:
         action="store_true",
         help="Discover existing Pinterest campaigns and seed them into campaign_log, then exit.",
     )
+    parser.add_argument(
+        "--test-apis",
+        action="store_true",
+        help="Connectivity check for all 4 external APIs (Pinterest, Northbeam, Meta, Anthropic). Exits 1 on failure.",
+    )
+    parser.add_argument(
+        "--clean-db",
+        action="store_true",
+        help="Wipe the state database and reinitialise a fresh schema, then exit.",
+    )
     args = parser.parse_args()
+
+    # --test-apis: no DB needed, run immediately
+    if args.test_apis:
+        test_apis()
+        return
 
     log.info("Initialising database...")
     db.init_db()
+
+    if args.clean_db:
+        clean_db()
+        return
 
     if args.seed:
         seed_existing_campaigns()
@@ -452,10 +583,13 @@ def main() -> None:
         coalesce=True,
     )
 
+    _start_health_server()   # Cloud Run health check endpoint
+
     log.info(
         "Scheduler started. Daily run at %s EST, digest at %s EST. "
-        "Shadow mode: %s.",
-        config.SCHEDULE_TIME, config.SLACK_DIGEST_TIME, config.SHADOW_MODE,
+        "Shadow mode: %s. Slack: %s.",
+        config.SCHEDULE_TIME, config.SLACK_DIGEST_TIME,
+        config.SHADOW_MODE, "enabled" if config.SLACK_ENABLED else "disabled",
     )
 
     try:

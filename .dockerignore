@@ -1,0 +1,14 @@
+.git
+.env
+.env.*
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+pinterest_buyer/state/pambs.db
+pinterest_buyer/logs/*.log
+*.egg-info
+.pytest_cache
+.coverage

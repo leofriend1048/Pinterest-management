@@ -1,0 +1,112 @@
+# Cloud Run service definition for PAMBS
+# ─────────────────────────────────────────────────────────────────────────────
+# Deploy (first time, after running setup.sh):
+#   gcloud run services replace deploy/cloud-run.yaml --region us-east1
+#
+# Update image after a new build:
+#   gcloud run services update pambs \
+#     --image us-east1-docker.pkg.dev/PROJECT_ID/pambs/pambs:latest \
+#     --region us-east1
+# ─────────────────────────────────────────────────────────────────────────────
+
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: pambs
+  annotations:
+    run.googleapis.com/launch-stage: BETA
+spec:
+  template:
+    metadata:
+      annotations:
+        # Keep exactly 1 instance alive so the APScheduler persists between runs
+        autoscaling.knative.dev/minScale: "1"
+        autoscaling.knative.dev/maxScale: "1"
+        # gen2 required for GCS FUSE volume mount (persistent SQLite)
+        run.googleapis.com/execution-environment: gen2
+    spec:
+      serviceAccountName: pambs-sa@PROJECT_ID.iam.gserviceaccount.com
+      # Allow up to 10 minutes for the daily run to complete
+      timeoutSeconds: 600
+      containers:
+        - image: us-east1-docker.pkg.dev/PROJECT_ID/pambs/pambs:latest
+          ports:
+            - containerPort: 8080
+          env:
+            # ── Pinterest ─────────────────────────────────────────────────────
+            - name: PINTEREST_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pambs-pinterest-token
+                  key: latest
+            - name: PINTEREST_AD_ACCOUNT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: pambs-pinterest-account-id
+                  key: latest
+            - name: PINTEREST_CONVERSION_TAG_ID
+              valueFrom:
+                secretKeyRef:
+                  name: pambs-pinterest-conversion-tag
+                  key: latest
+            # ── Meta ──────────────────────────────────────────────────────────
+            - name: META_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pambs-meta-token
+                  key: latest
+            - name: META_AD_ACCOUNT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: pambs-meta-account-id
+                  key: latest
+            # ── Northbeam ─────────────────────────────────────────────────────
+            - name: NORTHBEAM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pambs-northbeam-api-key
+                  key: latest
+            - name: NORTHBEAM_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: pambs-northbeam-client-id
+                  key: latest
+            # ── Anthropic ─────────────────────────────────────────────────────
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pambs-anthropic-key
+                  key: latest
+            # ── Slack ─────────────────────────────────────────────────────────
+            - name: SLACK_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pambs-slack-token
+                  key: latest
+            - name: SLACK_CHANNEL
+              value: "#pinterest-automated"
+            # ← flip to "true" once your Slack bot is configured
+            - name: SLACK_ENABLED
+              value: "false"
+            # ── PAMBS settings ────────────────────────────────────────────────
+            # ← flip to "false" after validating in shadow mode for 1 week
+            - name: SHADOW_MODE
+              value: "true"
+            - name: DB_PATH
+              value: /data/pambs.db
+            - name: LOG_LEVEL
+              value: INFO
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: pambs-state
+              mountPath: /data
+      volumes:
+        # GCS FUSE volume — SQLite persists across container restarts/deploys
+        - name: pambs-state
+          csi:
+            driver: gcsfuse.run.googleapis.com
+            volumeAttributes:
+              bucketName: pambs-state-PROJECT_ID

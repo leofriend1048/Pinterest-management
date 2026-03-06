@@ -319,6 +319,13 @@ def fetch_meta_campaign_roas(lookback_days: int = 7) -> dict[str, dict]:
         return {}
 
 
+# ── Connectivity test ─────────────────────────────────────────────────────────
+
+def ping() -> str:
+    """Lightweight auth check — discovers and returns the attribution model ID."""
+    return _get_attribution_model()
+
+
 # ── Backwards-compat single-window helpers ────────────────────────────────────
 
 def fetch_campaign_roas(lookback_days: int = 7) -> dict[str, dict]:

@@ -26,6 +26,9 @@ def _get_client() -> WebClient:
 
 
 def _post(blocks: list | None = None, text: str = "") -> None:
+    if not config.SLACK_ENABLED:
+        log.debug("Slack disabled — skipping: %s", text[:80])
+        return
     try:
         _get_client().chat_postMessage(
             channel=config.SLACK_CHANNEL,
