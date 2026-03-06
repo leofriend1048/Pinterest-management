@@ -190,6 +190,7 @@ def _run_export(level: str, platform: str, days: int) -> list[dict]:
         "metrics": [
             {"id": "spend"},
             {"id": "rev"},
+            {"id": "roas"},          # pre-computed by Northbeam (handles spend/rev row merging)
             {"id": "transactions"},
         ],
     }
@@ -244,16 +245,23 @@ def _aggregate_by_id(
 
         spend       = _parse_float(row.get("spend") or row.get("Spend"))
         revenue     = _parse_float(row.get("rev")   or row.get("Revenue"))
+        nb_roas     = _parse_float(row.get("roas")  or row.get("ROAS"))   # Northbeam pre-computed
         conversions = int(_parse_float(row.get("transactions") or row.get("Transactions")))
 
         if entity_id not in totals:
-            totals[entity_id] = {"spend": 0.0, "revenue": 0.0, "conversions": 0}
+            totals[entity_id] = {"spend": 0.0, "revenue": 0.0, "nb_roas": 0.0, "conversions": 0, "_days": 0}
         totals[entity_id]["spend"]       += spend
         totals[entity_id]["revenue"]     += revenue
+        totals[entity_id]["nb_roas"]     += nb_roas   # accumulated for daily avg
         totals[entity_id]["conversions"] += conversions
+        totals[entity_id]["_days"]       += 1
 
     for v in totals.values():
-        v["roas"] = v["revenue"] / v["spend"] if v["spend"] else 0.0
+        days = v.pop("_days") or 1
+        # Use Northbeam's pre-computed ROAS (avg across days) when available;
+        # fall back to sum(rev)/sum(spend) if the roas column wasn't returned.
+        nb_roas_avg = v.pop("nb_roas") / days
+        v["roas"] = nb_roas_avg if nb_roas_avg else (v["revenue"] / v["spend"] if v["spend"] else 0.0)
 
     return totals
 
@@ -374,15 +382,20 @@ def fetch_meta_campaign_roas(
         entity_id   = row.get(id_col, "").strip()
         spend       = _parse_float(row.get("spend")        or row.get("Spend"))
         revenue     = _parse_float(row.get("rev")          or row.get("Revenue"))
+        nb_roas     = _parse_float(row.get("roas")         or row.get("ROAS"))
         conversions = int(_parse_float(row.get("transactions") or row.get("Transactions")))
         if entity_id not in totals:
-            totals[entity_id] = {"spend": 0.0, "revenue": 0.0, "conversions": 0}
+            totals[entity_id] = {"spend": 0.0, "revenue": 0.0, "nb_roas": 0.0, "conversions": 0, "_days": 0}
         totals[entity_id]["spend"]       += spend
         totals[entity_id]["revenue"]     += revenue
+        totals[entity_id]["nb_roas"]     += nb_roas
         totals[entity_id]["conversions"] += conversions
+        totals[entity_id]["_days"]       += 1
 
     for v in totals.values():
-        v["roas"] = v["revenue"] / v["spend"] if v["spend"] else 0.0
+        days = v.pop("_days") or 1
+        nb_roas_avg = v.pop("nb_roas") / days
+        v["roas"] = nb_roas_avg if nb_roas_avg else (v["revenue"] / v["spend"] if v["spend"] else 0.0)
 
     log.info("Northbeam: fetched Meta ROAS for %d campaigns", len(totals))
     return totals
