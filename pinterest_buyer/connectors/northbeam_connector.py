@@ -129,6 +129,8 @@ def _submit_job(body: dict) -> str:
         json=body,
         timeout=_TIMEOUT,
     )
+    if not resp.ok:
+        log.error("Northbeam submit failed %s: %s", resp.status_code, resp.text[:500])
     resp.raise_for_status()
     job_id = resp.json()["data_export_id"]
     log.info("Northbeam: submitted export job %s (level=%s, days=%s–%s)",
@@ -209,7 +211,7 @@ def _run_export(level: str, platform: str, days: int) -> list[dict]:
         "attribution_options": {
             "attribution_models":  [_get_attribution_model()],
             "accounting_modes":    ["accrual"],
-            "attribution_windows": ["1"],
+            "attribution_windows": [1],
         },
         "metrics": [
             {"id": "spend"},

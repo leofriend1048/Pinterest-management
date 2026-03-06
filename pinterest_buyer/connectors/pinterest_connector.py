@@ -304,7 +304,7 @@ def get_campaign_analytics(
                 "CAMPAIGN_ID,SPEND_IN_DOLLAR,TOTAL_CONVERSIONS,"
                 "TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR,WEB_CHECKOUT_ROAS,"
                 "PAID_IMPRESSION,CLICKTHROUGH_1,"
-                "VIDEO_3SEC_VIEWS_2,VIDEO_P0_COMBINED_2"
+                "VIDEO_3SEC_VIEWS,VIDEO_P0_COMBINED"
             ),
             "granularity":         "TOTAL",
             "click_window_days":   config.CLICK_WINDOW_DAYS,
@@ -319,8 +319,8 @@ def get_campaign_analytics(
         imps        = int(row.get("PAID_IMPRESSION", 0) or 0)
         clicks      = int(row.get("CLICKTHROUGH_1", 0) or 0)
         conversions = int(row.get("TOTAL_CONVERSIONS", 0) or 0)
-        plays_3s    = int(row.get("VIDEO_3SEC_VIEWS_2", 0) or 0)
-        plays_all   = int(row.get("VIDEO_P0_COMBINED_2", 0) or 0)
+        plays_3s    = int(row.get("VIDEO_3SEC_VIEWS", 0) or 0)
+        plays_all   = int(row.get("VIDEO_P0_COMBINED", 0) or 0)
         results.append(
             {
                 "campaign_id": row.get("CAMPAIGN_ID"),
@@ -356,7 +356,7 @@ def get_ad_analytics(
                 "AD_ID,SPEND_IN_DOLLAR,TOTAL_CONVERSIONS,"
                 "TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR,WEB_CHECKOUT_ROAS,"
                 "PAID_IMPRESSION,CLICKTHROUGH_1,FREQUENCY,"
-                "VIDEO_3SEC_VIEWS_2,VIDEO_P0_COMBINED_2"
+                "VIDEO_3SEC_VIEWS,VIDEO_P0_COMBINED"
             ),
             "granularity":       "TOTAL",
             "click_window_days": config.CLICK_WINDOW_DAYS,
@@ -372,8 +372,8 @@ def get_ad_analytics(
         clicks      = int(row.get("CLICKTHROUGH_1", 0) or 0)
         conversions = int(row.get("TOTAL_CONVERSIONS", 0) or 0)
         frequency   = float(row.get("FREQUENCY", 0) or 0)
-        plays_3s    = int(row.get("VIDEO_3SEC_VIEWS_2", 0) or 0)
-        plays_all   = int(row.get("VIDEO_P0_COMBINED_2", 0) or 0)
+        plays_3s    = int(row.get("VIDEO_3SEC_VIEWS", 0) or 0)
+        plays_all   = int(row.get("VIDEO_P0_COMBINED", 0) or 0)
         results.append(
             {
                 "ad_id":       row.get("AD_ID"),
