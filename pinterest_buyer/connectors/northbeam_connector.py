@@ -133,7 +133,16 @@ def _submit_job(body: dict, start: str, end: str) -> str:
     if not resp.ok:
         log.error("Northbeam submit failed %s: %s", resp.status_code, resp.text[:500])
     resp.raise_for_status()
-    job_id = resp.json()["data_export_id"]
+    payload = resp.json()
+    log.debug("Northbeam submit response: %s", payload)
+    job_id = (
+        payload.get("data_export_id")
+        or payload.get("id")
+        or payload.get("export_id")
+        or payload.get("job_id")
+    )
+    if not job_id:
+        raise RuntimeError(f"Northbeam submit: no job ID in response: {payload}")
     log.info("Northbeam: submitted export job %s (level=%s, days=%s–%s)",
              job_id, body.get("level"), start, end)
     return job_id

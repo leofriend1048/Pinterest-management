@@ -354,7 +354,7 @@ def get_ad_analytics(
             "columns":           (
                 "AD_ID,SPEND_IN_DOLLAR,TOTAL_CONVERSIONS,"
                 "TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR,"
-                "PAID_IMPRESSION,CLICKTHROUGH_1,FREQUENCY"
+                "PAID_IMPRESSION,CLICKTHROUGH_1"
             ),
             "granularity":       "TOTAL",
             "click_window_days": config.CLICK_WINDOW_DAYS,
