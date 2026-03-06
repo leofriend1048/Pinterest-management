@@ -108,14 +108,23 @@ def _actalike_audiences(brand: str) -> list[str]:
     return [aud_id] if aud_id else []
 
 
-def _discovery_targeting(brand: str) -> dict:
-    spec: dict = {
-        "audience_types":        ["ACTALIKE"],
-        "actalike_type":         "ACTALIKE",
-        "actalike_sizes":        list(config.ACTALIKE_DISC_SIZE_RANGE),
-        "auto_interest_expansion": True,
-        "geo":                   config.BRAND_CONFIG.get(brand, {}).get("geo", ["US"]),
+def _base_targeting(brand: str) -> dict:
+    """Common targeting applied to every ad group: geo, gender, age."""
+    return {
+        "geo":         config.BRAND_CONFIG.get(brand, {}).get("geo", ["US"]),
+        "genders":     config.TARGET_GENDER,
+        "age_bucket":  config.TARGET_AGE_BUCKETS,
     }
+
+
+def _discovery_targeting(brand: str) -> dict:
+    spec = _base_targeting(brand)
+    spec.update({
+        "audience_types":          ["ACTALIKE"],
+        "actalike_type":           "ACTALIKE",
+        "actalike_sizes":          list(config.ACTALIKE_DISC_SIZE_RANGE),
+        "auto_interest_expansion": True,
+    })
     audiences = _actalike_audiences(brand)
     if audiences:
         spec["audiences"] = audiences
@@ -123,11 +132,11 @@ def _discovery_targeting(brand: str) -> dict:
 
 
 def _actalike_targeting(brand: str) -> dict:
-    spec: dict = {
+    spec = _base_targeting(brand)
+    spec.update({
         "audience_types": ["ACTALIKE"],
         "actalike_sizes": list(config.ACTALIKE_SCALE_SIZE_RANGE),
-        "geo":            config.BRAND_CONFIG.get(brand, {}).get("geo", ["US"]),
-    }
+    })
     audiences = _actalike_audiences(brand)
     if audiences:
         spec["audiences"] = audiences
@@ -135,20 +144,19 @@ def _actalike_targeting(brand: str) -> dict:
 
 
 def _pplus_targeting(brand: str) -> dict:
-    """Performance+ uses Pinterest automated targeting."""
-    return {
-        "audience_types": ["AUTOPILOT"],
-        "geo":            config.BRAND_CONFIG.get(brand, {}).get("geo", ["US"]),
-    }
+    """Performance+ automated targeting — still apply gender/age."""
+    spec = _base_targeting(brand)
+    spec["audience_types"] = ["AUTOPILOT"]
+    return spec
 
 
 def _broad_targeting(brand: str) -> dict:
-    spec: dict = {
+    spec = _base_targeting(brand)
+    spec.update({
         "audience_types": ["KEYWORD"],
         "keywords": [{"match_type": "BROAD", "value": kw}
                      for kw in config.KEYWORD_SEEDS.get(brand, [])],
-        "geo": config.BRAND_CONFIG.get(brand, {}).get("geo", ["US"]),
-    }
+    })
     interest_ids = config.INTEREST_SEEDS.get(brand, [])
     if interest_ids:
         spec["audience_types"] = ["INTEREST", "KEYWORD"]
@@ -157,12 +165,13 @@ def _broad_targeting(brand: str) -> dict:
 
 
 def _keyword_targeting(brand: str) -> dict:
-    return {
+    spec = _base_targeting(brand)
+    spec.update({
         "audience_types": ["KEYWORD"],
         "keywords": [{"match_type": "EXACT", "value": kw}
                      for kw in config.KEYWORD_SEEDS.get(brand, [])],
-        "geo": config.BRAND_CONFIG.get(brand, {}).get("geo", ["US"]),
-    }
+    })
+    return spec
 
 
 TARGETING_FACTORY = {
@@ -253,6 +262,9 @@ def launch_weekly_discovery(brand: str) -> str | None:
             name=ad_name,
             media_id=media_id,
             link=landing_url,
+            call_to_action=config.AD_CTA,
+            title=config.AD_TITLE.get(brand, ""),
+            description=config.AD_DESCRIPTION.get(brand, ""),
         )
         db.set_creative_pin_id(c["meta_creative_id"], "discovery", ad_id)
 

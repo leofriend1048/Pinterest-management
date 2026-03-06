@@ -157,16 +157,24 @@ def create_ad_group(
     targeting_spec: dict,
     daily_budget_usd: float | None = None,
 ) -> str:
+    """
+    Create an ad group with ROAS optimization and auto bidding.
+
+    ROAS optimization is always applied (Pinterest Performance+ Bidding).
+    Requires PINTEREST_CONVERSION_TAG_ID in env for full attribution; logs a
+    warning if missing but still creates the ad group.
+    """
     body: dict[str, Any] = {
-        "campaign_id":    campaign_id,
-        "name":           name,
-        "billable_event": "CLICKTHROUGH",
-        "targeting_spec": targeting_spec,
-        "status":         "ACTIVE",
-        "ad_account_id":  config.PINTEREST_AD_ACCOUNT_ID,
+        "campaign_id":       campaign_id,
+        "name":              name,
+        "billable_event":    "CLICKTHROUGH",
+        "targeting_spec":    targeting_spec,
+        "status":            "ACTIVE",
+        "ad_account_id":     config.PINTEREST_AD_ACCOUNT_ID,
         "bid_strategy_type": "AUTOMATIC_BID",
     }
-    # Attach ROAS-optimised goal if a conversion tag is configured
+
+    # ROAS optimization — always on.  Conversion tag required for attribution.
     if config.PINTEREST_CONVERSION_TAG_ID:
         body["optimization_goal_metadata"] = {
             "conversion_tag_v3_goal_metadata": {
@@ -176,6 +184,19 @@ def create_ad_group(
                 "learning_mode_type": "ACTIVE",
             }
         }
+    else:
+        log.warning(
+            "PINTEREST_CONVERSION_TAG_ID not set — ROAS optimization active but "
+            "conversion attribution will use last-click only.  Add the tag ID to .env."
+        )
+        body["optimization_goal_metadata"] = {
+            "conversion_tag_v3_goal_metadata": {
+                "conversion_event":  "checkout",
+                "is_roas_optimized": True,
+                "learning_mode_type": "ACTIVE",
+            }
+        }
+
     if daily_budget_usd:
         body["daily_spend_cap"] = int(daily_budget_usd * 1_000_000)
 
@@ -197,22 +218,37 @@ def create_ad(
     pin_id: str | None = None,
     media_id: str | None = None,
     link: str = "https://example.com",
+    call_to_action: str = "SHOP_NOW",
+    title: str = "",
+    description: str = "",
 ) -> str:
-    """Create an ad within an ad group. Returns ad_id."""
+    """
+    Create an ad within an ad group. Returns ad_id.
+
+    - call_to_action: Pinterest CTA button (SHOP_NOW, LEARN_MORE, etc.)
+    - title / description: pin title and description for new promoted pins.
+    - Thumbnail is auto-selected by Pinterest (best frame for video).
+    """
     creative: dict[str, Any] = {"ad_account_id": config.PINTEREST_AD_ACCOUNT_ID}
     if pin_id:
         creative["pin_id"] = pin_id
     elif media_id:
         creative["media_id"] = media_id
 
-    body = {
-        "ad_group_id":  ad_group_id,
+    body: dict[str, Any] = {
+        "ad_group_id":   ad_group_id,
         "creative_type": "REGULAR",
         "name":          name,
         "status":        "ACTIVE",
         "link":          link,
+        "call_to_action": call_to_action,
         **creative,
     }
+    if title:
+        body["title"] = title
+    if description:
+        body["description"] = description
+
     resp = _req(
         "POST",
         f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/ads",

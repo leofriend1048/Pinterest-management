@@ -86,28 +86,61 @@ BRAND_CONFIG = {
 }
 
 # Pinterest Saved Audience IDs for actalike seed (purchasers 180-day).
-# Fill in from Pinterest Ads Manager → Audiences after creating the list.
-# Leave empty to fall back to Pinterest's pixel-based actalike.
+# MTB audience ID sourced from: ads.pinterest.com/advertiser/549755981346/audience/edit?audienceId=2542622686748
 BRAND_AUDIENCE_IDS = {
-    "michael_todd_beauty": os.getenv("MTB_PINTEREST_AUDIENCE_ID", ""),
+    "michael_todd_beauty": os.getenv("MTB_PINTEREST_AUDIENCE_ID", "2542622686748"),
     "nasalfresh_md":       os.getenv("NF_PINTEREST_AUDIENCE_ID", ""),
     "spa_sciences":        os.getenv("SS_PINTEREST_AUDIENCE_ID", ""),
 }
 
 # ── Budgets ───────────────────────────────────────────────────────────────────
-# Per campaign-type daily budgets (USD).  Adjust to match your targets.
+# All campaigns launch at $300/day; PAMBS scales from there based on ROAS.
 CAMPAIGN_BUDGETS = {
-    "discovery":      100,   # weekly creative test — conservative while learning
-    "scale_actalike": 500,   # purchaser actalike 0-2%
-    "scale_pplus":    500,   # Performance+ automated
-    "scale_broad":    300,   # interest + broad keywords
-    "scale_keyword":  300,   # exact/phrase keywords
-    "challenger":     300,   # monthly P+ challenger
+    "discovery":      300,
+    "scale_actalike": 300,
+    "scale_pplus":    300,
+    "scale_broad":    300,
+    "scale_keyword":  300,
+    "challenger":     300,
 }
 
 # Legacy aliases kept for any code that still references these directly
 DISCOVERY_CAMPAIGN_BUDGET_USD = CAMPAIGN_BUDGETS["discovery"]
 SCALE_CAMPAIGN_BUDGET_USD     = CAMPAIGN_BUDGETS["scale_actalike"]
+
+# ── Default audience targeting ────────────────────────────────────────────────
+# Gender: female only
+TARGET_GENDER = ["FEMALE"]
+
+# Age: 21+ desired.  Pinterest's minimum bucket granularity is 18-24, so we
+# start at 25-34 to stay conservative.  Add "18-24" here if you want 18+.
+TARGET_AGE_BUCKETS = ["25-34", "35-44", "45-49", "50-54", "55-64", "65+"]
+
+# ── Ad creative defaults ──────────────────────────────────────────────────────
+AD_CTA = "SHOP_NOW"
+
+# Per-brand pin title & description for PAMBS-created ads.
+# (Existing promoted pins keep their original title/description.)
+AD_TITLE = {
+    "michael_todd_beauty": "Easy at-home dermaplaning",
+    "nasalfresh_md":       "Clear sinuses, better breathing",
+    "spa_sciences":        "Professional results at home",
+}
+
+AD_DESCRIPTION = {
+    "michael_todd_beauty": (
+        "It\u2019s a shame most ladies haven\u2019t discovered the power of peach fuzz removal "
+        "when many are unlocking their skin\u2019s true glow with this simple step!\n\n"
+        "Instantly reveal smoother, softer, more radiant skin with the Sonicsmooth "
+        "2-in-1 dermaplaning system.\n\n"
+        "\u2728 Exfoliates away dead and dry skin\n"
+        "\u2728 Removes unwanted facial hair\n"
+        "\u2728 Will not make your hair grow back thicker or longer\n"
+        "\u2728 Safer to use than a $2 drug store razor"
+    ),
+    "nasalfresh_md": "",
+    "spa_sciences":  "",
+}
 
 # ── Attribution window ────────────────────────────────────────────────────────
 CLICK_WINDOW_DAYS = 7   # 7-day click attribution
