@@ -133,8 +133,9 @@ def _submit_job(body: dict) -> str:
         log.error("Northbeam submit failed %s: %s", resp.status_code, resp.text[:500])
     resp.raise_for_status()
     job_id = resp.json()["data_export_id"]
+    dr = body.get("date_range", {})
     log.info("Northbeam: submitted export job %s (level=%s, days=%s–%s)",
-             job_id, body.get("level"), body.get("start_date"), body.get("end_date"))
+             job_id, body.get("level"), dr.get("start"), dr.get("end"))
     return job_id
 
 
@@ -196,8 +197,10 @@ def _run_export(level: str, platform: str, days: int) -> list[dict]:
     body: dict[str, Any] = {
         "level":            level,
         "time_granularity": "DAILY",
-        "start_date":       start.isoformat(),
-        "end_date":         end.isoformat(),
+        "date_range": {
+            "start": start.isoformat(),
+            "end":   end.isoformat(),
+        },
         "breakdowns": [
             {"key": "Platform (Northbeam)", "values": [platform]},
         ],
@@ -211,13 +214,12 @@ def _run_export(level: str, platform: str, days: int) -> list[dict]:
         "attribution_options": {
             "attribution_models":  [_get_attribution_model()],
             "accounting_modes":    ["accrual"],
-            "attribution_windows": [1],
+            "attribution_windows": ["1"],
         },
         "metrics": [
             {"id": "spend"},
             {"id": "rev"},
-            {"id": "roas"},          # may not be available on all accounts — fallback below
-            {"id": "transactions"},  # may not be available on all accounts — fallback to 0
+            {"id": "roas"},   # may not be available on all accounts — fallback below
         ],
     }
 

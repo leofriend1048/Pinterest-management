@@ -302,7 +302,7 @@ def get_campaign_analytics(
             "end_date":            end_date,
             "columns":             (
                 "CAMPAIGN_ID,SPEND_IN_DOLLAR,TOTAL_CONVERSIONS,"
-                "TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR,WEB_CHECKOUT_ROAS,"
+                "TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR,"
                 "PAID_IMPRESSION,CLICKTHROUGH_1,"
                 "VIDEO_3SEC_VIEWS,VIDEO_P0_COMBINED"
             ),
@@ -354,7 +354,7 @@ def get_ad_analytics(
             "end_date":          end_date,
             "columns":           (
                 "AD_ID,SPEND_IN_DOLLAR,TOTAL_CONVERSIONS,"
-                "TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR,WEB_CHECKOUT_ROAS,"
+                "TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR,"
                 "PAID_IMPRESSION,CLICKTHROUGH_1,FREQUENCY,"
                 "VIDEO_3SEC_VIEWS,VIDEO_P0_COMBINED"
             ),
