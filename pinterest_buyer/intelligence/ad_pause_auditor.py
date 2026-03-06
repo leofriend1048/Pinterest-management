@@ -2,17 +2,24 @@
 Ad-level pause auditor.
 
 Scans every active ad across the entire account and pauses those that hit
-any of the three underperformance conditions:
+any of the three underperformance conditions.
+
+All three rules now consider performance across three lookback windows:
+  yesterday (1d) / last 3 days / last 7 days
 
   Rule 1 — Frequency cap:
-    frequency > 3.5 AND ROAS < target  (high freq + bad ROAS)
+    frequency (7d) > 3.5 AND ROAS is below floor in both 1d AND 3d windows.
+    Frequency alone never pauses; ROAS must be confirmed weak recently.
 
   Rule 2 — ROAS decay:
-    7-day ROAS dropped > 30% from its first-week ROAS
-    AND absolute ROAS < 0.7× target
+    7-day ROAS dropped > 30% from the ad's first-week ROAS
+    AND absolute ROAS is below floor in both 1d AND 3d windows.
+    Prevents pausing on a transient 7-day blip if today is recovering.
 
   Rule 3 — Persistent underperformance:
-    ROAS < 0.7× target AND spend > $150 AND runtime > 72 hours
+    ROAS below floor in BOTH 1d AND 3d windows (not just one bad day)
+    AND 7d ROAS also below floor
+    AND spend > $150 AND runtime > 72 hours.
 
 A creative can be paused in one scale lane while staying active in others.
 """
@@ -27,9 +34,37 @@ from state import db
 
 log = logging.getLogger(__name__)
 
+_WINDOWS = (1, 3, 7)
+
+
+# ── Multi-window analytics fetch ──────────────────────────────────────────────
+
+def _fetch_multiwindow_ad_analytics(
+    ad_ids: list[str],
+    end: date,
+) -> dict[int, dict[str, dict]]:
+    """
+    Fetch Pinterest ad analytics for 1d, 3d, 7d windows.
+
+    Returns {days: {ad_id: analytics_dict}}
+    """
+    result: dict[int, dict[str, dict]] = {}
+    for days in _WINDOWS:
+        start = end - timedelta(days=days - 1)
+        try:
+            rows = pinterest.get_ad_analytics(
+                ad_ids, start.isoformat(), end.isoformat()
+            )
+            result[days] = {r["ad_id"]: r for r in rows}
+        except Exception as exc:
+            log.warning("Pinterest %dd ad analytics failed: %s", days, exc)
+            result[days] = {}
+    return result
+
+
+# ── DB lookups ────────────────────────────────────────────────────────────────
 
 def _get_first_week_roas(ad_id: str) -> float | None:
-    """Return the average ROAS from the first 7 days of this ad's life."""
     with db.get_db() as conn:
         row = conn.execute(
             """SELECT AVG(roas) as roas
@@ -55,72 +90,108 @@ def _get_ad_runtime_days(ad_id: str) -> int:
     if not row or not row["first"]:
         return 0
     try:
-        first = date.fromisoformat(row["first"])
-        return (date.today() - first).days
+        return (date.today() - date.fromisoformat(row["first"])).days
     except ValueError:
         return 0
 
 
+# ── Pause logic ───────────────────────────────────────────────────────────────
+
 def _check_pause_rules(
-    ad: dict,
+    ad_id: str,
     brand: str,
-    recent_roas: float,
-    spend: float,
-    frequency: float,
+    windows: dict[int, dict[str, dict]],   # {days: analytics_dict_for_this_ad}
 ) -> tuple[bool, str]:
     """
+    Evaluate all three pause rules using multi-window data.
     Returns (should_pause, reason).
     """
-    target = config.TARGET_ROAS[brand]
+    target      = config.TARGET_ROAS[brand]
+    floor_abs   = target * config.AD_PAUSE_ROAS_FLOOR
 
-    # Rule 1: Frequency + ROAS
-    if (
-        frequency > config.AD_PAUSE_FREQUENCY_THRESHOLD
-        and recent_roas < target * config.AD_PAUSE_ROAS_FLOOR
-    ):
-        return True, (
-            f"Frequency {frequency:.1f} > {config.AD_PAUSE_FREQUENCY_THRESHOLD} "
-            f"AND ROAS {recent_roas:.2f}x < {target * config.AD_PAUSE_ROAS_FLOOR:.2f}x target floor."
+    roas_1d = windows.get(1, {}).get("roas", 0.0)
+    roas_3d = windows.get(3, {}).get("roas", 0.0)
+    roas_7d = windows.get(7, {}).get("roas", 0.0)
+    spend_7d    = windows.get(7, {}).get("spend", 0.0)
+    frequency_7d = windows.get(7, {}).get("frequency", 0.0)
+
+    # Helper: is this window data present?
+    has_1d = roas_1d > 0
+    has_3d = roas_3d > 0
+    has_7d = roas_7d > 0
+
+    window_str = (
+        f"1d={roas_1d:.2f}x | 3d={roas_3d:.2f}x | 7d={roas_7d:.2f}x "
+        f"(floor={floor_abs:.2f}x)"
+    )
+
+    # ── Rule 1: Frequency + confirmed recent ROAS weakness ────────────────────
+    if frequency_7d > config.AD_PAUSE_FREQUENCY_THRESHOLD:
+        # Require ROAS to be bad in both 1d AND 3d to confirm it's not a blip
+        recent_bad = (
+            (has_1d and roas_1d < floor_abs)
+            and (has_3d and roas_3d < floor_abs)
         )
-
-    # Rule 3: Persistent underperformance (check before decay so runtime gate applies to both)
-    runtime = _get_ad_runtime_days(ad.get("ad_id", ""))
-    if (
-        recent_roas < target * config.AD_PAUSE_ROAS_FLOOR
-        and spend > config.AD_PAUSE_MIN_SPEND_USD
-        and runtime > config.AD_PAUSE_MIN_RUNTIME_DAYS
-    ):
-        return True, (
-            f"ROAS {recent_roas:.2f}x < {target * config.AD_PAUSE_ROAS_FLOOR:.2f}x target, "
-            f"spend ${spend:.0f} > ${config.AD_PAUSE_MIN_SPEND_USD:.0f}, "
-            f"runtime {runtime}d > {config.AD_PAUSE_MIN_RUNTIME_DAYS}d."
-        )
-
-    # Rule 2: ROAS decay
-    first_week_roas = _get_first_week_roas(ad.get("ad_id", ""))
-    if first_week_roas and first_week_roas > 0:
-        decay = (first_week_roas - recent_roas) / first_week_roas
-        if (
-            decay > config.AD_PAUSE_DECAY_THRESHOLD
-            and recent_roas < target * config.AD_PAUSE_ROAS_FLOOR
-        ):
+        if recent_bad:
             return True, (
-                f"7-day ROAS decayed {decay*100:.0f}% from first-week baseline "
-                f"({first_week_roas:.2f}x → {recent_roas:.2f}x) "
-                f"AND absolute ROAS < {target * config.AD_PAUSE_ROAS_FLOOR:.2f}x target floor."
+                f"Frequency {frequency_7d:.1f} (7d) > {config.AD_PAUSE_FREQUENCY_THRESHOLD} "
+                f"AND ROAS confirmed weak in both recent windows. {window_str}"
             )
+
+    # ── Rule 3: Persistent underperformance across all three windows ──────────
+    runtime = _get_ad_runtime_days(ad_id)
+    if runtime > config.AD_PAUSE_MIN_RUNTIME_DAYS and spend_7d > config.AD_PAUSE_MIN_SPEND_USD:
+        # All three windows must be present and below floor
+        all_bad = (
+            has_1d and roas_1d < floor_abs
+            and has_3d and roas_3d < floor_abs
+            and has_7d and roas_7d < floor_abs
+        )
+        if all_bad:
+            return True, (
+                f"Persistent underperformance across all 3 windows. {window_str} "
+                f"| spend(7d)=${spend_7d:.0f}, runtime={runtime}d."
+            )
+
+        # Softer case: 1d and 3d both bad but 7d not yet below floor — nudge flag only
+        if (
+            has_1d and roas_1d < floor_abs
+            and has_3d and roas_3d < floor_abs
+            and spend_7d > config.AD_PAUSE_MIN_SPEND_USD * 2
+        ):
+            log.info(
+                "[%s] Ad %s: 1d+3d below floor but 7d OK — monitoring, not pausing. %s",
+                brand, ad_id, window_str,
+            )
+
+    # ── Rule 2: ROAS decay (first-week baseline vs recent) ───────────────────
+    first_week_roas = _get_first_week_roas(ad_id)
+    if first_week_roas and first_week_roas > 0:
+        # Use 7d as the "current" end, but require 1d AND 3d to also be weak
+        decay = (first_week_roas - roas_7d) / first_week_roas if has_7d else 0.0
+        if decay > config.AD_PAUSE_DECAY_THRESHOLD:
+            recent_confirmed = (
+                (has_1d and roas_1d < floor_abs)
+                and (has_3d and roas_3d < floor_abs)
+            )
+            if recent_confirmed:
+                return True, (
+                    f"ROAS decayed {decay*100:.0f}% from first-week baseline "
+                    f"({first_week_roas:.2f}x) and confirmed weak in recent windows. "
+                    f"{window_str}"
+                )
 
     return False, ""
 
 
+# ── Main entry point ──────────────────────────────────────────────────────────
+
 def run_ad_pause_audit() -> list[dict]:
     """
-    Main entry point. Runs for all active campaigns across all brands.
+    Scans every active ad across all brands and campaigns.
     Returns list of pause event dicts for the morning digest.
     """
-    end   = date.today() - timedelta(days=1)
-    start = end - timedelta(days=6)  # 7-day window
-
+    yesterday = date.today() - timedelta(days=1)
     paused_events: list[dict] = []
 
     for brand in config.BRANDS:
@@ -135,34 +206,30 @@ def run_ad_pause_audit() -> list[dict]:
             if not active_ads:
                 continue
 
-            ad_ids = [a["id"] for a in active_ads]
-            try:
-                analytics = pinterest.get_ad_analytics(
-                    ad_ids, start.isoformat(), end.isoformat()
-                )
-            except Exception as exc:
-                log.error("Analytics fetch failed for campaign %s: %s", campaign_id, exc)
-                continue
-
+            ad_ids   = [a["id"] for a in active_ads]
             name_map = {a["id"]: a.get("name", a["id"]) for a in active_ads}
 
-            for row in analytics:
-                ad_id     = row.get("ad_id", "")
-                ad_name   = name_map.get(ad_id, ad_id)
-                spend     = row.get("spend", 0)
-                roas      = row.get("roas", 0)
-                frequency = row.get("frequency", 0)
+            # Fetch 1d, 3d, 7d analytics for all ads in this campaign at once
+            mw_raw = _fetch_multiwindow_ad_analytics(ad_ids, yesterday)
 
-                should_pause, reason = _check_pause_rules(
-                    row, brand, roas, spend, frequency
-                )
+            for ad_id in ad_ids:
+                # Reshape to {days: analytics_for_this_ad}
+                ad_windows = {
+                    days: mw_raw.get(days, {}).get(ad_id, {})
+                    for days in _WINDOWS
+                }
 
+                should_pause, reason = _check_pause_rules(ad_id, brand, ad_windows)
                 if not should_pause:
                     continue
 
+                ad_name  = name_map.get(ad_id, ad_id)
+                spend_7d = ad_windows.get(7, {}).get("spend", 0.0)
+                roas_w   = ad_windows.get(7, {}).get("roas", 0.0)   # 7d for display
+
                 log.info(
-                    "[%s/%s] Pausing ad %s (ROAS=%.2f, spend=$%.0f, freq=%.1f): %s",
-                    brand, camp["campaign_type"], ad_name, roas, spend, frequency, reason,
+                    "[%s/%s] Pausing ad '%s' — %s",
+                    brand, camp["campaign_type"], ad_name, reason,
                 )
 
                 if not config.SHADOW_MODE:
@@ -172,7 +239,7 @@ def run_ad_pause_audit() -> list[dict]:
                         log.error("Failed to pause ad %s: %s", ad_id, exc)
                         continue
 
-                # Persist snapshot
+                # Persist 7d snapshot
                 db.insert_performance_snapshot(
                     {
                         "snapshot_date": date.today().isoformat(),
@@ -180,15 +247,15 @@ def run_ad_pause_audit() -> list[dict]:
                         "ad_id":         ad_id,
                         "brand":         brand,
                         "campaign_type": camp["campaign_type"],
-                        "spend_usd":     spend,
-                        "revenue_usd":   roas * spend,
-                        "roas":          roas,
-                        "ncpa":          row.get("ncpa", 0),
-                        "impressions":   row.get("impressions", 0),
-                        "clicks":        row.get("clicks", 0),
-                        "ctr":           row.get("ctr", 0),
-                        "frequency":     frequency,
-                        "conversions":   row.get("conversions", 0),
+                        "spend_usd":     spend_7d,
+                        "revenue_usd":   roas_w * spend_7d,
+                        "roas":          roas_w,
+                        "ncpa":          ad_windows.get(7, {}).get("ncpa", 0),
+                        "impressions":   ad_windows.get(7, {}).get("impressions", 0),
+                        "clicks":        ad_windows.get(7, {}).get("clicks", 0),
+                        "ctr":           ad_windows.get(7, {}).get("ctr", 0),
+                        "frequency":     ad_windows.get(7, {}).get("frequency", 0),
+                        "conversions":   ad_windows.get(7, {}).get("conversions", 0),
                     }
                 )
 
@@ -197,8 +264,11 @@ def run_ad_pause_audit() -> list[dict]:
                     "ad_name":       ad_name,
                     "brand":         brand,
                     "campaign_type": camp["campaign_type"],
-                    "spend_usd":     spend,
-                    "roas":          roas,
+                    "spend_usd":     spend_7d,
+                    "roas":          roas_w,
+                    "roas_1d":       ad_windows.get(1, {}).get("roas", 0.0),
+                    "roas_3d":       ad_windows.get(3, {}).get("roas", 0.0),
+                    "roas_7d":       roas_w,
                     "reason":        reason,
                 }
                 paused_events.append(event)
@@ -208,9 +278,12 @@ def run_ad_pause_audit() -> list[dict]:
                     ad_name=ad_name,
                     campaign_type=camp["campaign_type"],
                     brand=brand,
-                    spend_usd=spend,
-                    roas=roas,
+                    spend_usd=spend_7d,
+                    roas=roas_w,
                     reason=reason,
+                    roas_1d=event["roas_1d"],
+                    roas_3d=event["roas_3d"],
+                    roas_7d=event["roas_7d"],
                 )
 
     log.info("Ad pause audit complete — %d ads paused.", len(paused_events))

@@ -159,3 +159,39 @@ def fetch_ad_roas(
 
     log.info("Northbeam: fetched ad-level ROAS for %d ads", len(result))
     return result
+
+
+def fetch_multiwindow_campaign_roas(
+    windows: tuple[int, ...] = (1, 3, 7),
+) -> dict[int, dict[str, dict]]:
+    """
+    Fetch Northbeam campaign ROAS for multiple lookback windows in one call set.
+
+    Returns
+    -------
+    {
+        1: {"<campaign_id>": {"spend": float, "roas": float, ...}},
+        3: {...},
+        7: {...},
+    }
+    """
+    result: dict[int, dict[str, dict]] = {}
+    for days in windows:
+        result[days] = fetch_campaign_roas(lookback_days=days)
+    return result
+
+
+def fetch_multiwindow_ad_roas(
+    windows: tuple[int, ...] = (1, 3, 7),
+) -> dict[int, dict[str, dict]]:
+    """
+    Fetch Northbeam ad-level ROAS for multiple lookback windows.
+
+    Returns
+    -------
+    {1: {"<ad_id>": {...}}, 3: {...}, 7: {...}}
+    """
+    result: dict[int, dict[str, dict]] = {}
+    for days in windows:
+        result[days] = fetch_ad_roas(lookback_days=days)
+    return result

@@ -146,15 +146,23 @@ def alert_ad_paused(
     spend_usd: float,
     roas: float,
     reason: str,
+    roas_1d: float | None = None,
+    roas_3d: float | None = None,
+    roas_7d: float | None = None,
 ) -> None:
+    roas_line = f"*ROAS (7d):* {roas:.2f}x"
+    if roas_1d is not None and roas_3d is not None and roas_7d is not None:
+        roas_line = (
+            f"*ROAS windows:* 1d={roas_1d:.2f}x | 3d={roas_3d:.2f}x | 7d={roas_7d:.2f}x"
+        )
     blocks = [
         _header("⏸️ Ad Paused"),
         _section(
             f"*Brand:* {brand.replace('_', ' ').title()}\n"
             f"*Ad:* {ad_name} (`{ad_id}`)\n"
             f"*Campaign:* {campaign_type}\n"
-            f"*Spend to date:* ${spend_usd:,.2f}\n"
-            f"*ROAS:* {roas:.2f}x\n"
+            f"*Spend (7d):* ${spend_usd:,.2f}\n"
+            f"{roas_line}\n"
             f"*Reason:* {reason}"
         ),
     ]
