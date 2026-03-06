@@ -15,7 +15,7 @@ API surface (Northbeam v1 Data Export)
 
 Auth
 ----
-  Authorization: Basic <base64(api_key:)>   (api_key as username, empty password)
+  Authorization: Basic <api_key>   (raw key — NOT base64-encoded)
   Data-Client-ID: <NORTHBEAM_CLIENT_ID>
 
 Design
@@ -33,7 +33,6 @@ Attribution settings (per spec)
   window param — the account's clicks+views model is auto-discovered on first run.
 """
 
-import base64
 import csv
 import io
 import logging
@@ -58,9 +57,9 @@ _cached_model: str | None = None
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 def _headers() -> dict:
-    token = base64.b64encode(f"{config.NORTHBEAM_API_KEY}:".encode()).decode()
+    # Northbeam uses the raw API key directly after "Basic" — not base64-encoded
     return {
-        "Authorization":  f"Basic {token}",
+        "Authorization":  f"Basic {config.NORTHBEAM_API_KEY}",
         "Data-Client-ID": config.NORTHBEAM_CLIENT_ID,
         "Content-Type":   "application/json",
         "Accept":         "application/json",
@@ -153,29 +152,33 @@ def _download_csv(url: str) -> list[dict]:
 
 def _run_export(level: str, platform: str, days: int) -> list[dict]:
     """
-    Submit a TOTAL-granularity export job covering the last `days` days.
-    Northbeam aggregates the date range and returns ROAS pre-computed.
+    Submit a DAILY-granularity export job for the last `days` days, aggregated
+    to one row per entity over the period (aggregate_data=True).
 
-    level    — "campaign" | "ad" | "adset"
-    platform — "Pinterest" | "Facebook Ads"
-    days     — lookback window (e.g. 1 = yesterday only, 7 = last 7 days)
+    level    — "campaign" | "ad"
+    platform — "Pinterest" | "Facebook Ads"  (exact Northbeam breakdown label)
+    days     — lookback window (1 = yesterday only, 3 = last 3 days, 7 = last 7 days)
+
+    Metrics requested: spend + rev (confirmed IDs). roas and transactions are
+    attempted; if absent in CSV, ROAS is computed from rev/spend and conversions
+    default to 0.
     """
     end   = date.today() - timedelta(days=1)      # yesterday
     start = end - timedelta(days=days - 1)
 
     body: dict[str, Any] = {
         "level":            level,
-        "time_granularity": "DAILY",               # required; TOTAL returns one aggregate row
+        "time_granularity": "DAILY",
         "start_date":       start.isoformat(),
         "end_date":         end.isoformat(),
         "breakdowns": [
             {"key": "Platform (Northbeam)", "values": [platform]},
         ],
         "options": {
-            "export_aggregation":     "BREAKDOWN",
-            "remove_zero_spend":      False,
-            "aggregate_data":         True,         # collapse to one row per entity over the period
-            "include_ids":            True,
+            "export_aggregation":        "BREAKDOWN",
+            "remove_zero_spend":         False,
+            "aggregate_data":            True,   # collapse to one row per entity
+            "include_ids":               True,
             "include_kind_and_platform": False,
         },
         "attribution_options": {
@@ -186,8 +189,8 @@ def _run_export(level: str, platform: str, days: int) -> list[dict]:
         "metrics": [
             {"id": "spend"},
             {"id": "rev"},
-            {"id": "roas"},          # pre-computed by Northbeam — do not recompute
-            {"id": "transactions"},
+            {"id": "roas"},          # may not be available on all accounts — fallback below
+            {"id": "transactions"},  # may not be available on all accounts — fallback to 0
         ],
     }
 
@@ -216,11 +219,21 @@ def _parse_float(val: Any) -> float:
 
 def _parse_rows(rows: list[dict], id_candidates: list[str]) -> dict[str, dict]:
     """
-    Parse a TOTAL-granularity CSV (one row per entity) into a dict keyed by entity ID.
-    ROAS is taken directly from the 'roas' / 'ROAS' column — not computed.
+    Parse an aggregated Northbeam CSV (one row per entity) into a dict keyed
+    by entity ID.
+
+    ROAS: taken from the 'roas'/'ROAS' column when present; otherwise computed
+    as rev/spend (mathematically equivalent since 'rev' is Northbeam-attributed
+    revenue already weighted by the attribution model).
+
+    Conversions: taken from 'transactions'/'Transactions' when present; defaults
+    to 0 if the column is absent (non-critical — only used for informational logging).
     """
     if not rows:
         return {}
+
+    if rows:
+        log.debug("Northbeam CSV columns available: %s", list(rows[0].keys()))
 
     id_col = _find_col(rows[0], id_candidates)
     if not id_col:
@@ -232,10 +245,16 @@ def _parse_rows(rows: list[dict], id_candidates: list[str]) -> dict[str, dict]:
         entity_id = row.get(id_col, "").strip()
         if not entity_id:
             continue
-        spend       = _parse_float(row.get("spend")        or row.get("Spend"))
-        revenue     = _parse_float(row.get("rev")          or row.get("Revenue"))
-        roas        = _parse_float(row.get("roas")         or row.get("ROAS"))
-        conversions = int(_parse_float(row.get("transactions") or row.get("Transactions")))
+        spend   = _parse_float(row.get("spend")        or row.get("Spend"))
+        revenue = _parse_float(row.get("rev")          or row.get("Revenue")
+                               or row.get("attributed_revenue"))
+        # ROAS: use API value if present, else compute from rev/spend
+        roas = _parse_float(row.get("roas") or row.get("ROAS"))
+        if roas == 0.0 and spend > 0 and revenue > 0:
+            roas = revenue / spend
+        conversions = int(_parse_float(
+            row.get("transactions") or row.get("Transactions") or 0
+        ))
         result[entity_id] = {
             "spend":       spend,
             "revenue":     revenue,

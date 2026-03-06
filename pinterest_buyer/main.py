@@ -453,6 +453,64 @@ def _anthropic_ping() -> str:
     return f"model={config.CLAUDE_MODEL} ok (stop_reason={msg.stop_reason})"
 
 
+def debug_northbeam() -> None:
+    """
+    Print the live Northbeam API catalogue: attribution models, available
+    metrics (with exact IDs), and breakdown keys/values.
+
+    Use after auth is confirmed to verify the exact metric IDs and breakdown
+    labels our connector should request.
+    """
+    import requests as _req
+    from connectors import northbeam_connector as nb
+
+    headers = nb._headers()
+    base    = nb._BASE_URL
+    W = 64
+
+    print("\n" + "═" * W)
+    print("  Northbeam API Catalogue  (live from your account)")
+    print("═" * W)
+
+    print("\n  Attribution Models:")
+    try:
+        r = _req.get(f"{base}/v1/exports/attribution-models",
+                     headers=headers, timeout=15)
+        r.raise_for_status()
+        for m in r.json():
+            print(f"    id={m.get('id')!r:44s} name={m.get('name')!r}")
+    except Exception as exc:
+        print(f"    ❌ {exc}")
+
+    print("\n  Available Metrics:")
+    try:
+        r = _req.get(f"{base}/v1/exports/metrics",
+                     headers=headers, timeout=15)
+        r.raise_for_status()
+        for m in r.json():
+            mid   = m.get("id", "")
+            label = m.get("label") or m.get("name") or ""
+            print(f"    id={mid!r:44s} label={label!r}")
+    except Exception as exc:
+        print(f"    ❌ {exc}")
+
+    print("\n  Breakdowns (Platform values):")
+    try:
+        r = _req.get(f"{base}/v1/exports/breakdowns",
+                     headers=headers, timeout=15)
+        r.raise_for_status()
+        for bd in r.json():
+            key = bd.get("key", "")
+            if "platform" in key.lower():
+                print(f"    key={key!r}")
+                for v in bd.get("values", []):
+                    print(f"      {v!r}")
+    except Exception as exc:
+        print(f"    ❌ {exc}")
+
+    print("\n" + "═" * W + "\n")
+
+
 # ── DB reset ──────────────────────────────────────────────────────────────────
 
 def clean_db() -> None:
@@ -530,11 +588,20 @@ def main() -> None:
         action="store_true",
         help="Wipe the state database and reinitialise a fresh schema, then exit.",
     )
+    parser.add_argument(
+        "--debug-northbeam",
+        action="store_true",
+        help="Print live Northbeam API catalogue (attribution models, metric IDs, breakdown labels), then exit.",
+    )
     args = parser.parse_args()
 
-    # --test-apis: no DB needed, run immediately
+    # --test-apis / --debug-northbeam: no DB needed, run immediately
     if args.test_apis:
         test_apis()
+        return
+
+    if args.debug_northbeam:
+        debug_northbeam()
         return
 
     log.info("Initialising database...")
