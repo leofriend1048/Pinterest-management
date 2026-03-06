@@ -208,6 +208,7 @@ def _run_export(level: str, platform: str, days: int) -> list[dict]:
         "time_granularity": "DAILY",
         "breakdowns": [
             {"key": "Platform (Northbeam)", "values": [platform]},
+            {"key": "Campaign"},
         ],
         "options": {
             "remove_zero_spend":         False,
