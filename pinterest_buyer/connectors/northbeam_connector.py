@@ -210,7 +210,6 @@ def _run_export(level: str, platform: str, days: int) -> list[dict]:
             {"key": "Platform (Northbeam)", "values": [platform]},
         ],
         "options": {
-            "export_aggregation":        "BREAKDOWN",
             "remove_zero_spend":         False,
             "aggregate_data":            True,   # collapse to one row per entity
             "include_ids":               True,
