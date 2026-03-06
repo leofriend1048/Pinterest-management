@@ -122,10 +122,11 @@ def _extract_model_ids(raw: Any) -> list[str]:
 
 # ── Async job lifecycle ───────────────────────────────────────────────────────
 
-def _submit_job(body: dict) -> str:
+def _submit_job(body: dict, start: str, end: str) -> str:
     resp = requests.post(
         f"{_BASE_URL}/v1/exports/data-export",
         headers=_headers(),
+        params={"start_date": start, "end_date": end},
         json=body,
         timeout=_TIMEOUT,
     )
@@ -133,9 +134,8 @@ def _submit_job(body: dict) -> str:
         log.error("Northbeam submit failed %s: %s", resp.status_code, resp.text[:500])
     resp.raise_for_status()
     job_id = resp.json()["data_export_id"]
-    dr = body.get("date_range", {})
     log.info("Northbeam: submitted export job %s (level=%s, days=%s–%s)",
-             job_id, body.get("level"), dr.get("start"), dr.get("end"))
+             job_id, body.get("level"), start, end)
     return job_id
 
 
@@ -197,10 +197,6 @@ def _run_export(level: str, platform: str, days: int) -> list[dict]:
     body: dict[str, Any] = {
         "level":            level,
         "time_granularity": "DAILY",
-        "date_range": {
-            "start": start.isoformat(),
-            "end":   end.isoformat(),
-        },
         "breakdowns": [
             {"key": "Platform (Northbeam)", "values": [platform]},
         ],
@@ -223,7 +219,7 @@ def _run_export(level: str, platform: str, days: int) -> list[dict]:
         ],
     }
 
-    job_id  = _submit_job(body)
+    job_id  = _submit_job(body, start.isoformat(), end.isoformat())
     csv_url = _poll_job(job_id)
     return _download_csv(csv_url)
 

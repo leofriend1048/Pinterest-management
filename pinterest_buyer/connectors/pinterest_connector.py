@@ -303,8 +303,7 @@ def get_campaign_analytics(
             "columns":             (
                 "CAMPAIGN_ID,SPEND_IN_DOLLAR,TOTAL_CONVERSIONS,"
                 "TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR,"
-                "PAID_IMPRESSION,CLICKTHROUGH_1,"
-                "VIDEO_3SEC_VIEWS,VIDEO_P0_COMBINED"
+                "PAID_IMPRESSION,CLICKTHROUGH_1"
             ),
             "granularity":         "TOTAL",
             "click_window_days":   config.CLICK_WINDOW_DAYS,
@@ -355,8 +354,7 @@ def get_ad_analytics(
             "columns":           (
                 "AD_ID,SPEND_IN_DOLLAR,TOTAL_CONVERSIONS,"
                 "TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR,"
-                "PAID_IMPRESSION,CLICKTHROUGH_1,FREQUENCY,"
-                "VIDEO_3SEC_VIEWS,VIDEO_P0_COMBINED"
+                "PAID_IMPRESSION,CLICKTHROUGH_1,FREQUENCY"
             ),
             "granularity":       "TOTAL",
             "click_window_days": config.CLICK_WINDOW_DAYS,
