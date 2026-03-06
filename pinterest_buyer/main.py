@@ -455,12 +455,11 @@ def _anthropic_ping() -> str:
 
 def debug_northbeam() -> None:
     """
-    Print the live Northbeam API catalogue and raw response shapes.
-    Shows attribution models, available metric IDs, and breakdown labels.
-    Prints the raw JSON for each endpoint so we can fix the connector if the
-    response structure doesn't match expectations.
+    Print the live Northbeam API catalogue.
+    - Attribution models (with IDs)
+    - All available metric IDs + required-metric check
+    - Platform breakdown values
     """
-    import json as _json
     import requests as _req
     from connectors import northbeam_connector as nb
 
@@ -468,40 +467,66 @@ def debug_northbeam() -> None:
     base    = nb._BASE_URL
     W = 72
 
-    def _fetch(label: str, path: str):
-        print(f"\n  {label}:")
-        try:
-            r = _req.get(f"{base}{path}", headers=headers, timeout=15)
-            r.raise_for_status()
-            data = r.json()
-            print(f"    Raw response type: {type(data).__name__}")
-            print(f"    Raw (first 800 chars): {_json.dumps(data)[:800]}")
-            return data
-        except Exception as exc:
-            print(f"    ❌ {exc}")
-            return None
+    # Metric IDs the connector actually requests — verify they exist on this account
+    REQUIRED = {"spend", "rev", "roas", "transactions"}
 
     print("\n" + "═" * W)
-    print("  Northbeam API Catalogue  (live — raw responses shown for debugging)")
+    print("  Northbeam API Catalogue")
     print("═" * W)
 
-    _fetch("Attribution Models", "/v1/exports/attribution-models")
-    _fetch("Available Metrics",  "/v1/exports/metrics")
+    # ── Attribution models ────────────────────────────────────────────────────
+    print("\n  Attribution Models:")
+    try:
+        r = _req.get(f"{base}/v1/exports/attribution-models", headers=headers, timeout=15)
+        r.raise_for_status()
+        raw = r.json()
+        items = raw.get("attribution_models") or raw if isinstance(raw, list) else []
+        for m in items:
+            mid  = m.get("id", m) if isinstance(m, dict) else str(m)
+            name = m.get("name", "") if isinstance(m, dict) else ""
+            star = " ← selected" if "va" in mid else ""
+            print(f"    {mid:<44s}  {name}{star}")
+    except Exception as exc:
+        print(f"    ❌ {exc}")
 
-    bd_data = _fetch("Breakdowns", "/v1/exports/breakdowns")
-    if bd_data:
-        print("\n  Platform breakdown values (parsed):")
-        items = bd_data if isinstance(bd_data, list) else (
-            bd_data.get("data") or bd_data.get("breakdowns") or []
-        )
+    # ── Metrics ───────────────────────────────────────────────────────────────
+    print("\n  Available Metrics (all):")
+    try:
+        r = _req.get(f"{base}/v1/exports/metrics", headers=headers, timeout=15)
+        r.raise_for_status()
+        raw = r.json()
+        items = raw.get("metrics") or raw if isinstance(raw, list) else []
+        all_ids: set[str] = set()
+        for m in items:
+            mid   = m.get("id", "") if isinstance(m, dict) else str(m)
+            label = m.get("label", "") if isinstance(m, dict) else ""
+            all_ids.add(mid)
+            req_marker = " ◄ REQUIRED" if mid in REQUIRED else ""
+            print(f"    {mid:<44s}  {label}{req_marker}")
+        print(f"\n  Required metric check ({len(REQUIRED)} metrics):")
+        for mid in sorted(REQUIRED):
+            status = "✅ found" if mid in all_ids else "❌ NOT FOUND — connector will fall back"
+            print(f"    {mid:<20s}  {status}")
+    except Exception as exc:
+        print(f"    ❌ {exc}")
+
+    # ── Breakdowns ────────────────────────────────────────────────────────────
+    print("\n  Platform (Northbeam) breakdown values:")
+    try:
+        r = _req.get(f"{base}/v1/exports/breakdowns", headers=headers, timeout=15)
+        r.raise_for_status()
+        raw = r.json()
+        items = raw.get("breakdowns") or raw if isinstance(raw, list) else []
         for bd in items:
             if not isinstance(bd, dict):
                 continue
             key = bd.get("key", "")
             if "platform" in key.lower():
-                print(f"    key={key!r}")
                 for v in bd.get("values", []):
-                    print(f"      {v!r}")
+                    marker = " ← used" if v in ("Pinterest", "Facebook Ads") else ""
+                    print(f"    {v!r}{marker}")
+    except Exception as exc:
+        print(f"    ❌ {exc}")
 
     print("\n" + "═" * W + "\n")
 
