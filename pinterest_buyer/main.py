@@ -623,6 +623,9 @@ def main() -> None:
         debug_northbeam()
         return
 
+    # Start health server first so Cloud Run startup probe passes immediately
+    _start_health_server()
+
     log.info("Initialising database...")
     db.init_db()
 
@@ -668,8 +671,6 @@ def main() -> None:
         misfire_grace_time=600,
         coalesce=True,
     )
-
-    _start_health_server()   # Cloud Run health check endpoint
 
     log.info(
         "Scheduler started. Daily run at %s EST, digest at %s EST. "
