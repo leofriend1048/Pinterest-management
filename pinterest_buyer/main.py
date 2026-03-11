@@ -19,8 +19,28 @@ Usage
 
 import argparse
 import logging
+import os
 import sys
+import threading
 from datetime import datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+# ── Bind to $PORT immediately so Cloud Run's startup probe never times out ────
+# This runs at module-load time, before any application imports that could fail.
+def _bind_health_port() -> None:
+    class _H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+        def log_message(self, *a): pass   # silence access logs
+
+    port = int(os.environ.get("PORT", 8080))
+    srv = HTTPServer(("0.0.0.0", port), _H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+_bind_health_port()
+# ─────────────────────────────────────────────────────────────────────────────
 
 import pytz
 from apscheduler.schedulers.blocking import BlockingScheduler
