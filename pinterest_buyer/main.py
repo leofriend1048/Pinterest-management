@@ -22,20 +22,26 @@ import logging
 import os
 import sys
 import threading
+import traceback
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# ── Bind to $PORT immediately so Cloud Run's startup probe never times out ────
-# Runs at module-load time, before any application imports that could fail.
-# NON-daemon thread: keeps the process alive even if a later import crashes,
-# so the port stays bound, the TCP probe succeeds, and errors appear in logs.
+# ── Ensure this file's directory (pinterest_buyer/) is on sys.path ─────────────
+# This makes `import config`, `from state import db`, etc. work regardless of
+# how the process is invoked (python -m, direct script, PYTHONPATH or not).
+_pkg_dir = os.path.dirname(os.path.abspath(__file__))
+if _pkg_dir not in sys.path:
+    sys.path.insert(0, _pkg_dir)
+
+# ── Bind to $PORT immediately (NON-daemon: survives main-thread crash) ─────────
+# Runs before app imports so the TCP probe succeeds even if an import crashes.
 def _bind_health_port() -> HTTPServer:
     class _H(BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"OK")
-        def log_message(self, *a): pass   # silence access logs
+        def log_message(self, *a): pass
 
     port = int(os.environ.get("PORT", 8080))
     srv = HTTPServer(("0.0.0.0", port), _H)
@@ -45,33 +51,42 @@ def _bind_health_port() -> HTTPServer:
 _health_srv = _bind_health_port()
 # ─────────────────────────────────────────────────────────────────────────────
 
-import pytz
-from apscheduler.schedulers.blocking import BlockingScheduler
-from apscheduler.triggers.cron import CronTrigger
+# ── Application imports (wrapped so crash is visible in Cloud Run logs) ────────
+_import_error: Exception | None = None
+try:
+    import pytz
+    from apscheduler.schedulers.blocking import BlockingScheduler
+    from apscheduler.triggers.cron import CronTrigger
 
-import config
-from state import db
-from intelligence import (
-    budget_engine,
-    graduation_engine,
-    ad_pause_auditor,
-    campaign_launcher,
-    fatigue_detector,
-)
-from connectors import pinterest_connector as pinterest
-from agents import anomaly_agent, narrative_agent, opportunity_agent
-from notifications import slack
+    import config
+    from state import db
+    from intelligence import (
+        budget_engine,
+        graduation_engine,
+        ad_pause_auditor,
+        campaign_launcher,
+        fatigue_detector,
+    )
+    from connectors import pinterest_connector as pinterest
+    from agents import anomaly_agent, narrative_agent, opportunity_agent
+    from notifications import slack
+except Exception as _e:
+    _import_error = _e
+    traceback.print_exc(file=sys.stderr)
+    sys.stderr.flush()
 
-logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL, logging.INFO),
-    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-    ],
-)
+if _import_error is None:
+    logging.basicConfig(
+        level=getattr(logging, config.LOG_LEVEL, logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
+    _TZ = pytz.timezone(config.SCHEDULE_TIMEZONE)
+else:
+    logging.basicConfig(level=logging.ERROR, handlers=[logging.StreamHandler(sys.stderr)])
+    _TZ = None  # type: ignore[assignment]
+
 log = logging.getLogger("pambs.main")
-
-_TZ = pytz.timezone(config.SCHEDULE_TIMEZONE)
 
 # ── Stored digest state (populated during 3 AM run, posted at 7 AM) ───────────
 _digest_payload: dict = {
@@ -577,6 +592,17 @@ def clean_db() -> None:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
+    if _import_error is not None:
+        log.error("Startup aborted — import failed: %s", _import_error)
+        log.error("The health server is still running on port %s so Cloud Run "
+                  "considers this instance alive. Check stderr logs for the full "
+                  "traceback, fix the root cause, and redeploy.", os.environ.get("PORT", 8080))
+        # Block forever so the non-daemon health thread keeps the process alive
+        # and the full error stays visible in Cloud Run logs.
+        import time
+        while True:
+            time.sleep(3600)
+
     parser = argparse.ArgumentParser(description="PAMBS orchestrator")
     parser.add_argument(
         "--once",
