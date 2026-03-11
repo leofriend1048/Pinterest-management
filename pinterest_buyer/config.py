@@ -149,8 +149,8 @@ ACTALIKE_DISC_SIZE_RANGE  = (0.01, 0.03)   # 1–3% for discovery campaigns
 
 # ── Weekly discovery ──────────────────────────────────────────────────────────
 WEEKLY_CAMPAIGN_DAY         = "monday"
-META_TOP_N_CREATIVES        = 5
-META_CREATIVE_MIN_SPEND_USD = 150
+META_TOP_N_CREATIVES        = 30
+META_CREATIVE_MIN_SPEND_USD = 500
 META_CREATIVE_LOOKBACK_DAYS = 7
 
 # ── Scale graduation ──────────────────────────────────────────────────────────

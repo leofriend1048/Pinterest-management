@@ -156,8 +156,19 @@ def fetch_top_creatives(
             }
         )
 
-    creatives.sort(key=lambda c: c["roas"], reverse=True)
-    return creatives[:top_n]
+    # Deduplicate by ad name — multiple ad copies often share the same creative
+    # but differ only by ad set.  Keep the highest-spend instance per name so
+    # we never test the same creative twice on Pinterest.
+    seen: dict[str, dict] = {}
+    for c in creatives:
+        name = c["name"]
+        if name not in seen or c["spend"] > seen[name]["spend"]:
+            seen[name] = c
+    deduped = list(seen.values())
+
+    # Sort by spend descending — highest-volume creatives launch first.
+    deduped.sort(key=lambda c: c["spend"], reverse=True)
+    return deduped[:top_n]
 
 
 def ping() -> int:
