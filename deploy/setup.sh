@@ -49,9 +49,13 @@ gcloud artifacts repositories create "${REPO}" \
 
 # ── 3. Service account ─────────────────────────────────────────────────────────
 echo "==> [3/7] Creating service account..."
-gcloud iam service-accounts create "${SA}" \
-    --display-name="PAMBS runtime service account" \
-    --project="${PROJECT}" 2>/dev/null || echo "  (already exists)"
+if gcloud iam service-accounts describe "${SA_EMAIL}" --project="${PROJECT}" &>/dev/null; then
+    echo "  (already exists)"
+else
+    gcloud iam service-accounts create "${SA}" \
+        --display-name="PAMBS runtime service account" \
+        --project="${PROJECT}"
+fi
 
 gcloud projects add-iam-policy-binding "${PROJECT}" \
     --member="serviceAccount:${SA_EMAIL}" \
