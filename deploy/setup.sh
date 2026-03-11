@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-PROJECT="${PROJECT_ID:-$(gcloud config get-value project)}"
+PROJECT="${PROJECT_ID:-reel-fuse}"
 REGION="${REGION:-us-east1}"
 REPO="pambs"
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/pambs"

@@ -1,12 +1,13 @@
 # Cloud Run service definition for PAMBS
 # ─────────────────────────────────────────────────────────────────────────────
-# Deploy (first time, after running setup.sh):
-#   gcloud run services replace deploy/cloud-run.yaml --region us-east1
+# First deploy — run from repo root:
+#   ./deploy/setup.sh
 #
-# Update image after a new build:
-#   gcloud run services update pambs \
-#     --image us-east1-docker.pkg.dev/PROJECT_ID/pambs/pambs:latest \
-#     --region us-east1
+# Re-deploy after a code change:
+#   gcloud builds submit --tag us-east1-docker.pkg.dev/reel-fuse/pambs/pambs:latest \
+#     --project=reel-fuse
+#   sed "s/PROJECT_ID/reel-fuse/g" deploy/cloud-run.yaml | \
+#     gcloud run services replace - --region=us-east1 --project=reel-fuse
 # ─────────────────────────────────────────────────────────────────────────────
 
 apiVersion: serving.knative.dev/v1
@@ -85,11 +86,11 @@ spec:
                   key: latest
             - name: SLACK_CHANNEL
               value: "#pinterest-automated"
-            # ← flip to "true" once your Slack bot is configured
+            # Flip to "true" after completing Slack bot setup (see RUNBOOK.md)
             - name: SLACK_ENABLED
               value: "false"
             # ── PAMBS settings ────────────────────────────────────────────────
-            # ← flip to "false" after validating in shadow mode for 1 week
+            # Flip to "false" after validating in shadow mode for ~1 week
             - name: SHADOW_MODE
               value: "true"
             - name: DB_PATH
