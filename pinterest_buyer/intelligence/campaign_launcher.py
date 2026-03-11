@@ -13,25 +13,22 @@ Naming convention
              MTB    | TOF      | Scale      | Actalike            | Q1-2026
              MTB    | TOF      | Scale      | Perf+               | Q1-2026
              MTB    | TOF      | Scale      | Broad               | Q1-2026
-             MTB    | TOF      | Scale      | Keyword             | Q1-2026
              MTB    | TOF      | Challenger | Perf+               | Mar-2026
 
   Ad set  : {CODE} | {TARGETING_DETAIL}              | {GEO} | {BID}
+             MTB    | Perf+-Automated                 | US    | Auto  (discovery)
              MTB    | Actalike-Purchasers-180d        | US    | Auto
              MTB    | Perf+-Automated                 | US    | Auto
              MTB    | Interest-Beauty+KW-Broad        | US    | Auto
-             MTB    | KW-Dermaplaning+SkinCare        | US    | Auto
-             MTB    | Actalike-Purchasers-1-3pct      | US    | Auto
 
   Ad      : (same name as the originating Meta creative — no renaming)
 
 Targeting specs per campaign type
 ----------------------------------
-  discovery        — Actalike 1–3%, purchasers seed, interest expansion ON
+  discovery        — Performance+ automated, women 21+, no additional targeting
   scale_actalike   — Actalike 0–2%, purchasers seed (180-day)
   scale_pplus      — Pinterest Performance+ automated
   scale_broad      — Interest + broad keywords
-  scale_keyword    — Exact/phrase keywords only
 """
 
 import logging
@@ -82,7 +79,6 @@ def _campaign_name(brand: str, camp_type: str, today: date | None = None) -> str
         "scale_actalike": ("TOF", "Scale",      "Actalike", _quarter_label(today)),
         "scale_pplus":    ("TOF", "Scale",      "Perf+",    _quarter_label(today)),
         "scale_broad":    ("TOF", "Scale",      "Broad",    _quarter_label(today)),
-        "scale_keyword":  ("TOF", "Scale",      "Keyword",  _quarter_label(today)),
         "challenger":     ("TOF", "Challenger", "Perf+",    _month_label(today)),
     }
     funnel, ctype_label, audience, period = _TYPE_MAP.get(
@@ -118,16 +114,9 @@ def _base_targeting(brand: str) -> dict:
 
 
 def _discovery_targeting(brand: str) -> dict:
+    """Performance+ automated targeting for discovery — gender/age only, no additional targeting."""
     spec = _base_targeting(brand)
-    spec.update({
-        "audience_types":          ["ACTALIKE"],
-        "actalike_type":           "ACTALIKE",
-        "actalike_sizes":          list(config.ACTALIKE_DISC_SIZE_RANGE),
-        "auto_interest_expansion": True,
-    })
-    audiences = _actalike_audiences(brand)
-    if audiences:
-        spec["audiences"] = audiences
+    spec["audience_types"] = ["AUTOPILOT"]
     return spec
 
 
@@ -164,31 +153,19 @@ def _broad_targeting(brand: str) -> dict:
     return spec
 
 
-def _keyword_targeting(brand: str) -> dict:
-    spec = _base_targeting(brand)
-    spec.update({
-        "audience_types": ["KEYWORD"],
-        "keywords": [{"match_type": "EXACT", "value": kw}
-                     for kw in config.KEYWORD_SEEDS.get(brand, [])],
-    })
-    return spec
-
-
 TARGETING_FACTORY = {
     "discovery":      _discovery_targeting,
     "scale_actalike": _actalike_targeting,
     "scale_pplus":    _pplus_targeting,
     "scale_broad":    _broad_targeting,
-    "scale_keyword":  _keyword_targeting,
 }
 
 # Human-readable targeting detail used in ad set names
 _ADSET_DETAIL = {
-    "discovery":      f"Actalike-Purchasers-{config.ACTALIKE_DISC_SIZE_RANGE[0]*100:.0f}-{config.ACTALIKE_DISC_SIZE_RANGE[1]*100:.0f}pct",
+    "discovery":      "Perf+-Automated",
     "scale_actalike": f"Actalike-Purchasers-{config.ACTALIKE_SEED_DAYS}d",
     "scale_pplus":    "Perf+-Automated",
     "scale_broad":    "Interest-Beauty+KW-Broad",
-    "scale_keyword":  "KW-Dermaplaning+SkinCare",
     "challenger":     "Perf+-Automated",
 }
 
@@ -218,7 +195,7 @@ def launch_weekly_discovery(brand: str) -> str | None:
     Returns the new Pinterest campaign ID, or None if no creatives qualify.
 
     Naming: MTB | TOF | Test | W11-2026
-    Ad set: MTB | Actalike-Purchasers-1-3pct | US | Auto
+    Ad set: MTB | Perf+-Automated | US | Auto  (women 21+, Performance+ only)
     Ads:    same name as the originating Meta creative
     """
     log.info("[%s] Launching weekly discovery campaign.", brand)
@@ -343,20 +320,18 @@ def launch_monthly_challenger(brand: str) -> str | None:
 
 def ensure_scale_campaigns_exist(brand: str) -> dict[str, str]:
     """
-    Ensure all four scale campaigns exist for the brand.
+    Ensure all three scale campaigns exist for the brand.
     Creates any that are missing.  Returns {campaign_type: campaign_id}.
 
     Naming examples (MTB):
       MTB | TOF | Scale | Actalike | Q1-2026
       MTB | TOF | Scale | Perf+    | Q1-2026
       MTB | TOF | Scale | Broad    | Q1-2026
-      MTB | TOF | Scale | Keyword  | Q1-2026
 
     Ad set examples:
       MTB | Actalike-Purchasers-180d       | US | Auto
       MTB | Perf+-Automated                | US | Auto
       MTB | Interest-Beauty+KW-Broad       | US | Auto
-      MTB | KW-Dermaplaning+SkinCare       | US | Auto
     """
     existing = {
         c["campaign_type"]: c["campaign_id"]

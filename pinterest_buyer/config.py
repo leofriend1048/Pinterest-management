@@ -39,14 +39,12 @@ CAMPAIGN_TYPES = [
     "scale_actalike",
     "scale_pplus",
     "scale_broad",
-    "scale_keyword",
 ]
 
 SCALE_CAMPAIGN_TYPES = [
     "scale_actalike",
     "scale_pplus",
     "scale_broad",
-    "scale_keyword",
 ]
 
 # ── Brand metadata (code used in naming convention, geo, conversion event) ────
@@ -56,15 +54,13 @@ SCALE_CAMPAIGN_TYPES = [
 #              MTB    | TOF      | Scale         | Actalike                | Q1-2026
 #              MTB    | TOF      | Scale         | Perf+                   | Q1-2026
 #              MTB    | TOF      | Scale         | Broad                   | Q1-2026
-#              MTB    | TOF      | Scale         | Keyword                 | Q1-2026
 #              MTB    | TOF      | Challenger    | Perf+                   | Mar-2026
 #
 #   Ad set  : {CODE} | {TARGETING_DETAIL}                     | {GEO} | {BID}
 #              MTB    | Actalike-Purchasers-180d               | US    | Auto
 #              MTB    | Perf+-Automated                        | US    | Auto
 #              MTB    | Interest-Beauty+KW-Broad               | US    | Auto
-#              MTB    | KW-Dermaplaning+SkinCare               | US    | Auto
-#              MTB    | Actalike-Purchasers-1-3pct             | US    | Auto
+#              MTB    | Perf+-Automated                        | US    | Auto  (discovery)
 #
 #   Ad      : (same name as the Meta creative — no renaming)
 #
@@ -101,7 +97,6 @@ CAMPAIGN_BUDGETS = {
     "scale_actalike": 300,
     "scale_pplus":    300,
     "scale_broad":    300,
-    "scale_keyword":  300,
     "challenger":     300,
 }
 
@@ -113,9 +108,9 @@ SCALE_CAMPAIGN_BUDGET_USD     = CAMPAIGN_BUDGETS["scale_actalike"]
 # Gender: female only
 TARGET_GENDER = ["FEMALE"]
 
-# Age: 21+ desired.  Pinterest's minimum bucket granularity is 18-24, so we
-# start at 25-34 to stay conservative.  Add "18-24" here if you want 18+.
-TARGET_AGE_BUCKETS = ["25-34", "35-44", "45-49", "50-54", "55-64", "65+"]
+# Age: 21+ desired.  Pinterest's minimum bucket granularity is 18-24, so
+# including "18-24" is the closest approximation to 21+.
+TARGET_AGE_BUCKETS = ["18-24", "25-34", "35-44", "45-49", "50-54", "55-64", "65+"]
 
 # ── Ad creative defaults ──────────────────────────────────────────────────────
 AD_CTA = "SHOP_NOW"

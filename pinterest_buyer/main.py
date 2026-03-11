@@ -95,9 +95,9 @@ def seed_existing_campaigns() -> None:
         ("performance_plus", "scale_pplus"),
         ("performance plus", "scale_pplus"),
         ("perf+",            "scale_pplus"),
-        ("kw only",          "scale_keyword"),
-        ("kw_",              "scale_keyword"),
-        ("keyword",          "scale_keyword"),
+        ("kw only",          "scale_broad"),
+        ("kw_",              "scale_broad"),
+        ("keyword",          "scale_broad"),
         ("broad",            "scale_broad"),
         ("interest",         "scale_broad"),
         ("beauty interest",  "scale_broad"),
@@ -217,7 +217,7 @@ def _ingest_daypart_and_keywords() -> None:
 
     # ── Keyword ingestion ─────────────────────────────────────────────────────
     # Only pull from keyword-type campaigns (they have actual keyword targeting)
-    kw_campaigns = [c for c in all_campaigns if c["campaign_type"] in ("scale_keyword", "scale_broad")]
+    kw_campaigns = [c for c in all_campaigns if c["campaign_type"] == "scale_broad"]
     if not kw_campaigns:
         return
 
