@@ -105,51 +105,43 @@ def _actalike_audiences(brand: str) -> list[str]:
 
 
 def _base_targeting(brand: str) -> dict:
-    """Common targeting applied to every ad group: geo, gender, age."""
+    """Common targeting applied to every ad group: geo, gender, age.
+
+    Uses Pinterest v5 API uppercase field names.
+    """
     return {
-        "geo":         config.BRAND_CONFIG.get(brand, {}).get("geo", ["US"]),
-        "genders":     config.TARGET_GENDER,
-        "age_bucket":  config.TARGET_AGE_BUCKETS,
+        "GEO":        config.BRAND_CONFIG.get(brand, {}).get("geo", ["US"]),
+        "GENDER":     config.TARGET_GENDER,
+        "AGE_BUCKET": config.TARGET_AGE_BUCKETS,
     }
 
 
 def _discovery_targeting(brand: str) -> dict:
-    """Performance+ automated targeting for discovery — gender/age only, no additional targeting."""
-    spec = _base_targeting(brand)
-    spec["audience_types"] = ["AUTOPILOT"]
-    return spec
+    """Performance+ automated targeting for discovery — gender/age/geo only."""
+    return _base_targeting(brand)
 
 
 def _actalike_targeting(brand: str) -> dict:
     spec = _base_targeting(brand)
-    spec.update({
-        "audience_types": ["ACTALIKE"],
-        "actalike_sizes": list(config.ACTALIKE_SCALE_SIZE_RANGE),
-    })
     audiences = _actalike_audiences(brand)
     if audiences:
-        spec["audiences"] = audiences
+        spec["AUDIENCE_INCLUDE"] = audiences
     return spec
 
 
 def _pplus_targeting(brand: str) -> dict:
-    """Performance+ automated targeting — still apply gender/age."""
-    spec = _base_targeting(brand)
-    spec["audience_types"] = ["AUTOPILOT"]
-    return spec
+    """Performance+ automated targeting — gender/age/geo only, Pinterest optimises the rest."""
+    return _base_targeting(brand)
 
 
 def _broad_targeting(brand: str) -> dict:
     spec = _base_targeting(brand)
-    spec.update({
-        "audience_types": ["KEYWORD"],
-        "keywords": [{"match_type": "BROAD", "value": kw}
-                     for kw in config.KEYWORD_SEEDS.get(brand, [])],
-    })
+    keywords = config.KEYWORD_SEEDS.get(brand, [])
+    if keywords:
+        spec["KEYWORD"] = keywords
     interest_ids = config.INTEREST_SEEDS.get(brand, [])
     if interest_ids:
-        spec["audience_types"] = ["INTEREST", "KEYWORD"]
-        spec["interests"] = interest_ids
+        spec["INTEREST"] = interest_ids
     return spec
 
 
