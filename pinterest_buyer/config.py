@@ -86,6 +86,14 @@ BRAND_CONFIG = {
     },
 }
 
+# Pinterest board IDs — used when creating organic Pins before promoting as ads.
+# Find board IDs in ads.pinterest.com → Audiences → Boards, or via GET /v5/boards.
+BRAND_BOARD_IDS = {
+    "michael_todd_beauty": os.getenv("MTB_PINTEREST_BOARD_ID", ""),
+    "nasalfresh_md":       os.getenv("NF_PINTEREST_BOARD_ID", ""),
+    "spa_sciences":        os.getenv("SS_PINTEREST_BOARD_ID", ""),
+}
+
 # Pinterest Saved Audience IDs for actalike seed (purchasers 180-day).
 # MTB audience ID sourced from: ads.pinterest.com/advertiser/549755981346/audience/edit?audienceId=2542622686748
 BRAND_AUDIENCE_IDS = {

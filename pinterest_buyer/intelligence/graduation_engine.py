@@ -65,6 +65,31 @@ def _add_creative_to_scale_campaigns(
     """
     from connectors import pinterest_connector as pinterest
 
+    # Upload asset once and create one organic Pin for all four scale campaigns.
+    pin_id   = None
+    media_id = None
+    if local_asset_path and not config.SHADOW_MODE:
+        try:
+            if creative_format == "video":
+                media_id = pinterest.upload_video(local_asset_path)
+            else:
+                media_id = pinterest.upload_image(local_asset_path)
+
+            board_id = config.BRAND_BOARD_IDS.get(brand, "")
+            if board_id and media_id:
+                try:
+                    pin_id = pinterest.create_pin(
+                        media_id=media_id,
+                        board_id=board_id,
+                    )
+                except Exception as exc:
+                    log.warning("Pin creation failed for %s — will promote via media_id: %s",
+                                ad_name, exc)
+            elif not board_id:
+                log.warning("[%s] BOARD_ID not set — promoting graduated creative via media_id", brand)
+        except Exception as exc:
+            log.error("Asset upload failed for %s: %s", ad_name, exc)
+
     entered: list[str] = []
     for ctype, campaign_id in scale_campaign_map.items():
         ad_group_id = ad_group_map.get(campaign_id)
@@ -78,17 +103,11 @@ def _add_creative_to_scale_campaigns(
                 entered.append(campaign_id)
                 continue
 
-            media_id = None
-            if local_asset_path:
-                if creative_format == "video":
-                    media_id = pinterest.upload_video(local_asset_path)
-                else:
-                    media_id = pinterest.upload_image(local_asset_path)
-
             ad_id = pinterest.create_ad(
                 ad_group_id=ad_group_id,
                 name=ad_name,
-                media_id=media_id,
+                pin_id=pin_id,
+                media_id=media_id if not pin_id else None,
             )
             db.set_creative_pin_id(meta_creative_id, ctype, ad_id)
             entered.append(campaign_id)

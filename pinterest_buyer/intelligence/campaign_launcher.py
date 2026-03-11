@@ -251,16 +251,37 @@ def launch_weekly_discovery(brand: str) -> str | None:
         targeting_spec=targeting,
     )
 
+    board_id = config.BRAND_BOARD_IDS.get(brand, "")
     for c in creatives:
         media_id = _upload_creative(c)
         if not media_id:
             continue
+
+        # Step 4 (rep's flow): create an organic Pin from the processed media,
+        # then promote that Pin as an ad (step 5).
+        pin_id = None
+        if board_id:
+            try:
+                pin_id = pinterest.create_pin(
+                    media_id=media_id,
+                    board_id=board_id,
+                    link=landing_url,
+                    title=config.AD_TITLE.get(brand, ""),
+                    description=config.AD_DESCRIPTION.get(brand, ""),
+                )
+            except Exception as exc:
+                log.warning("Pin creation failed for %s — falling back to media_id: %s",
+                            c["meta_creative_id"], exc)
+        else:
+            log.warning("[%s] MTB_PINTEREST_BOARD_ID not set — promoting via media_id (no organic pin)", brand)
+
         # Ad name = Meta creative name (unchanged)
         ad_name = c.get("name") or c["meta_creative_id"]
         ad_id   = pinterest.create_ad(
             ad_group_id=ad_group_id,
             name=ad_name,
-            media_id=media_id,
+            pin_id=pin_id,
+            media_id=media_id if not pin_id else None,
             link=landing_url,
             call_to_action=config.AD_CTA,
             title=config.AD_TITLE.get(brand, ""),
