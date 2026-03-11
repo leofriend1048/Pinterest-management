@@ -44,7 +44,6 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("pinterest_buyer/logs/audit.log"),
     ],
 )
 log = logging.getLogger("pambs.main")
