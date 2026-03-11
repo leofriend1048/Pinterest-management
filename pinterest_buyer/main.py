@@ -26,8 +26,10 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # ── Bind to $PORT immediately so Cloud Run's startup probe never times out ────
-# This runs at module-load time, before any application imports that could fail.
-def _bind_health_port() -> None:
+# Runs at module-load time, before any application imports that could fail.
+# NON-daemon thread: keeps the process alive even if a later import crashes,
+# so the port stays bound, the TCP probe succeeds, and errors appear in logs.
+def _bind_health_port() -> HTTPServer:
     class _H(BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)
@@ -37,9 +39,10 @@ def _bind_health_port() -> None:
 
     port = int(os.environ.get("PORT", 8080))
     srv = HTTPServer(("0.0.0.0", port), _H)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, daemon=False, name="health").start()
+    return srv
 
-_bind_health_port()
+_health_srv = _bind_health_port()
 # ─────────────────────────────────────────────────────────────────────────────
 
 import pytz
@@ -570,33 +573,6 @@ def clean_db() -> None:
     print(f"  ✅ Fresh database initialised at {db_path}")
 
 
-# ── Cloud Run health server ───────────────────────────────────────────────────
-
-def _start_health_server() -> None:
-    """
-    Minimal HTTP server on $PORT (default 8080) for Cloud Run health checks.
-    Responds 200 OK to any GET. Runs in a background daemon thread.
-    Harmless when running locally (simply listens and waits).
-    """
-    import os
-    import threading
-    from http.server import BaseHTTPRequestHandler, HTTPServer
-
-    class _Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"OK")
-
-        def log_message(self, *args):
-            pass  # suppress per-request noise
-
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), _Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    log.info("Health server listening on :%d  (Cloud Run ready)", port)
-
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -642,9 +618,6 @@ def main() -> None:
     if args.debug_northbeam:
         debug_northbeam()
         return
-
-    # Start health server first so Cloud Run startup probe passes immediately
-    _start_health_server()
 
     log.info("Initialising database...")
     db.init_db()
@@ -703,6 +676,8 @@ def main() -> None:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):
         log.info("Scheduler stopped.")
+    finally:
+        _health_srv.shutdown()
 
 
 if __name__ == "__main__":
