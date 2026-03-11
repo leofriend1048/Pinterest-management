@@ -93,21 +93,37 @@ _secret() {
     echo "  OK: ${name}"
 }
 
-# Source .env (skip comments and blank lines)
-set -o allexport
-# shellcheck disable=SC1091
-source <(grep -v '^\s*#' .env | grep -v '^\s*$')
-set +o allexport
+# Parse .env with Python3 (handles quotes, inline comments, CRLF, long tokens)
+_env_val() {
+    python3 - "$1" <<'PYEOF'
+import sys, os, re
+key = sys.argv[1]
+with open(".env") as f:
+    for line in f:
+        line = line.rstrip("\r\n")
+        if not line or line.lstrip().startswith("#"):
+            continue
+        m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)=(.*)$', line)
+        if m and m.group(1) == key:
+            val = m.group(2).strip()
+            # Strip matching quotes if present
+            if (val.startswith('"') and val.endswith('"')) or \
+               (val.startswith("'") and val.endswith("'")):
+                val = val[1:-1]
+            print(val, end="")
+            sys.exit(0)
+PYEOF
+}
 
-_secret pambs-pinterest-token          "${PINTEREST_ACCESS_TOKEN:-}"
-_secret pambs-pinterest-account-id    "${PINTEREST_AD_ACCOUNT_ID:-}"
-_secret pambs-pinterest-conversion-tag "${PINTEREST_CONVERSION_TAG_ID:-}"
-_secret pambs-meta-token               "${META_ACCESS_TOKEN:-}"
-_secret pambs-meta-account-id          "${META_AD_ACCOUNT_ID:-}"
-_secret pambs-northbeam-api-key        "${NORTHBEAM_API_KEY:-}"
-_secret pambs-northbeam-client-id      "${NORTHBEAM_CLIENT_ID:-}"
-_secret pambs-anthropic-key            "${ANTHROPIC_API_KEY:-}"
-_secret pambs-slack-token              "${SLACK_BOT_TOKEN:-placeholder}"
+_secret pambs-pinterest-token          "$(_env_val PINTEREST_ACCESS_TOKEN)"
+_secret pambs-pinterest-account-id    "$(_env_val PINTEREST_AD_ACCOUNT_ID)"
+_secret pambs-pinterest-conversion-tag "$(_env_val PINTEREST_CONVERSION_TAG_ID)"
+_secret pambs-meta-token               "$(_env_val META_ACCESS_TOKEN)"
+_secret pambs-meta-account-id          "$(_env_val META_AD_ACCOUNT_ID)"
+_secret pambs-northbeam-api-key        "$(_env_val NORTHBEAM_API_KEY)"
+_secret pambs-northbeam-client-id      "$(_env_val NORTHBEAM_CLIENT_ID)"
+_secret pambs-anthropic-key            "$(_env_val ANTHROPIC_API_KEY)"
+_secret pambs-slack-token              "$(_env_val SLACK_BOT_TOKEN)"
 
 # Grant SA access to each secret
 for SECRET in \
