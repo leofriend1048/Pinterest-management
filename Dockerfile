@@ -16,7 +16,7 @@ COPY . .
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    # Cloud Run mounts a persistent volume at /data — SQLite lives there
+    PYTHONPATH=/app/pinterest_buyer \
     DB_PATH=/data/pambs.db \
     LOG_LEVEL=INFO
 
