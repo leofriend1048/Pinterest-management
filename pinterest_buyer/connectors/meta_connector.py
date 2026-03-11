@@ -33,7 +33,7 @@ import config
 
 log = logging.getLogger(__name__)
 
-_BASE_URL = "https://graph.facebook.com/v19.0"
+_BASE_URL = "https://graph.facebook.com/v21.0"
 _TIMEOUT  = 30
 
 

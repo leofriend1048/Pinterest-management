@@ -281,7 +281,6 @@ def launch_monthly_challenger(brand: str) -> str | None:
     campaign_id = pinterest.create_campaign(
         name=camp_name,
         daily_budget_usd=budget,
-        objective="CATALOG_SALES",
     )
 
     targeting   = _pplus_targeting(brand)
@@ -338,10 +337,18 @@ def ensure_scale_campaigns_exist(brand: str) -> dict[str, str]:
         if ctype in existing:
             continue
 
+        # Skip actalike if no seed audience is configured for this brand
+        if ctype == "scale_actalike" and not config.BRAND_AUDIENCE_IDS.get(brand):
+            log.info(
+                "[%s] Skipping scale_actalike — no audience ID configured "
+                "(set %s_PINTEREST_AUDIENCE_ID in .env to enable).",
+                brand, brand.upper(),
+            )
+            continue
+
         camp_name   = _campaign_name(brand, ctype, today)
         adset_nm    = _adset_name(brand, _ADSET_DETAIL[ctype])
         budget      = config.CAMPAIGN_BUDGETS[ctype]
-        landing_url = config.BRAND_LANDING_URLS.get(brand, "https://example.com")
 
         if config.SHADOW_MODE:
             log.info("[SHADOW] Would create scale campaign: %s", camp_name)
@@ -351,8 +358,19 @@ def ensure_scale_campaigns_exist(brand: str) -> dict[str, str]:
         targeting_fn = TARGETING_FACTORY[ctype]
         targeting    = targeting_fn(brand)
 
-        campaign_id  = pinterest.create_campaign(camp_name, budget)
-        ad_group_id  = pinterest.create_ad_group(campaign_id, adset_nm, targeting)
+        campaign_id = pinterest.create_campaign(camp_name, budget)
+        try:
+            ad_group_id = pinterest.create_ad_group(campaign_id, adset_nm, targeting)
+        except Exception as exc:
+            log.error(
+                "[%s] Ad group creation failed for %s — archiving orphaned campaign %s: %s",
+                brand, ctype, campaign_id, exc,
+            )
+            try:
+                pinterest.archive_campaign(campaign_id)
+            except Exception as arc_exc:
+                log.warning("Could not archive orphaned campaign %s: %s", campaign_id, arc_exc)
+            raise
 
         db.upsert_campaign(
             {

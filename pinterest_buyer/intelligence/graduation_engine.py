@@ -58,6 +58,7 @@ def _add_creative_to_scale_campaigns(
     ad_group_map: dict[str, str],         # {campaign_id: ad_group_id}
     local_asset_path: str | None,
     creative_format: str,
+    landing_url: str = "",
 ) -> list[str]:
     """
     Add a creative as a new ad into all four scale campaigns.
@@ -93,6 +94,10 @@ def _add_creative_to_scale_campaigns(
                 ad_group_id=ad_group_id,
                 name=ad_name,
                 media_id=media_id,
+                link=landing_url or "https://example.com",
+                call_to_action=config.AD_CTA,
+                title=config.AD_TITLE.get(brand, ""),
+                description=config.AD_DESCRIPTION.get(brand, ""),
             )
             db.set_creative_pin_id(meta_creative_id, ctype, ad_id)
             entered.append(campaign_id)
@@ -193,6 +198,7 @@ def run_graduation_check(brand: str) -> list[dict]:
                 ad_group_map=ad_group_map,
                 local_asset_path=asset,
                 creative_format=fmt,
+                landing_url=config.BRAND_LANDING_URLS.get(brand, ""),
             )
 
             if not entered:

@@ -110,7 +110,7 @@ def upload_video(local_path: str) -> str:
 def create_campaign(
     name: str,
     daily_budget_usd: float,
-    objective: str = "CATALOG_SALES",
+    objective: str = "WEB_CONVERSIONS",
 ) -> str:
     """Create a campaign and return its campaign_id."""
     body = {
@@ -149,6 +149,17 @@ def pause_campaign(campaign_id: str) -> None:
     log.info("Pinterest: paused campaign %s", campaign_id)
 
 
+def archive_campaign(campaign_id: str) -> None:
+    """Archive an orphaned campaign (e.g. when ad group creation failed)."""
+    body = {"id": campaign_id, "status": "ARCHIVED"}
+    _req(
+        "PATCH",
+        f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/campaigns",
+        json={"campaigns": [body]},
+    )
+    log.info("Pinterest: archived campaign %s", campaign_id)
+
+
 # ── Ad group management ───────────────────────────────────────────────────────
 
 def create_ad_group(
@@ -158,41 +169,39 @@ def create_ad_group(
     daily_budget_usd: float | None = None,
 ) -> str:
     """
-    Create an ad group with ROAS optimization and auto bidding.
+    Create an ad group with auto bidding.
 
-    ROAS optimization is always applied (Pinterest Performance+ Bidding).
-    Requires PINTEREST_CONVERSION_TAG_ID in env for full attribution; logs a
-    warning if missing but still creates the ad group.
+    When PINTEREST_CONVERSION_TAG_ID is set, enables ROAS-optimised IMPRESSION
+    billing.  Without a tag, falls back to CLICKTHROUGH billing with no ROAS
+    optimisation (Pinterest API rejects is_roas_optimized=True without a tag).
     """
+    if config.PINTEREST_CONVERSION_TAG_ID:
+        billable_event = "IMPRESSION"
+    else:
+        billable_event = "CLICKTHROUGH"
+        log.info(
+            "No PINTEREST_CONVERSION_TAG_ID — using CLICKTHROUGH billing without "
+            "ROAS optimization. Add the tag ID to .env to enable ROAS-optimised "
+            "IMPRESSION billing."
+        )
+
     body: dict[str, Any] = {
         "campaign_id":       campaign_id,
         "name":              name,
-        "billable_event":    "CLICKTHROUGH",
+        "billable_event":    billable_event,
         "targeting_spec":    targeting_spec,
         "status":            "ACTIVE",
         "ad_account_id":     config.PINTEREST_AD_ACCOUNT_ID,
         "bid_strategy_type": "AUTOMATIC_BID",
     }
 
-    # ROAS optimization — always on.  Conversion tag required for attribution.
+    # ROAS optimization requires both a conversion tag AND impression billing.
     if config.PINTEREST_CONVERSION_TAG_ID:
         body["optimization_goal_metadata"] = {
             "conversion_tag_v3_goal_metadata": {
                 "conversion_event":   "checkout",
                 "conversion_tag_id":  config.PINTEREST_CONVERSION_TAG_ID,
                 "is_roas_optimized":  True,
-                "learning_mode_type": "ACTIVE",
-            }
-        }
-    else:
-        log.warning(
-            "PINTEREST_CONVERSION_TAG_ID not set — ROAS optimization active but "
-            "conversion attribution will use last-click only.  Add the tag ID to .env."
-        )
-        body["optimization_goal_metadata"] = {
-            "conversion_tag_v3_goal_metadata": {
-                "conversion_event":  "checkout",
-                "is_roas_optimized": True,
                 "learning_mode_type": "ACTIVE",
             }
         }
