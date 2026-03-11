@@ -65,8 +65,7 @@ def _add_creative_to_scale_campaigns(
     """
     from connectors import pinterest_connector as pinterest
 
-    # Upload asset once and create one organic Pin for all four scale campaigns.
-    pin_id   = None
+    # Upload asset once, then reuse the same media_id across all four scale campaigns.
     media_id = None
     if local_asset_path and not config.SHADOW_MODE:
         try:
@@ -74,19 +73,6 @@ def _add_creative_to_scale_campaigns(
                 media_id = pinterest.upload_video(local_asset_path)
             else:
                 media_id = pinterest.upload_image(local_asset_path)
-
-            board_id = config.BRAND_BOARD_IDS.get(brand, "")
-            if board_id and media_id:
-                try:
-                    pin_id = pinterest.create_pin(
-                        media_id=media_id,
-                        board_id=board_id,
-                    )
-                except Exception as exc:
-                    log.warning("Pin creation failed for %s — will promote via media_id: %s",
-                                ad_name, exc)
-            elif not board_id:
-                log.warning("[%s] BOARD_ID not set — promoting graduated creative via media_id", brand)
         except Exception as exc:
             log.error("Asset upload failed for %s: %s", ad_name, exc)
 
@@ -106,8 +92,7 @@ def _add_creative_to_scale_campaigns(
             ad_id = pinterest.create_ad(
                 ad_group_id=ad_group_id,
                 name=ad_name,
-                pin_id=pin_id,
-                media_id=media_id if not pin_id else None,
+                media_id=media_id,
             )
             db.set_creative_pin_id(meta_creative_id, ctype, ad_id)
             entered.append(campaign_id)

@@ -105,41 +105,6 @@ def upload_video(local_path: str) -> str:
     return media_id
 
 
-# ── Pin creation ──────────────────────────────────────────────────────────────
-
-def create_pin(
-    media_id: str,
-    board_id: str,
-    link: str = "https://example.com",
-    title: str = "",
-    description: str = "",
-) -> str:
-    """
-    Create an organic Pin from a processed media_id. Returns pin_id.
-
-    Per Pinterest API v5 flow: upload media → poll until succeeded → create pin
-    → promote pin as ad.  The pin_id returned here is what gets passed to
-    create_ad() as the creative reference.
-    """
-    body: dict[str, Any] = {
-        "board_id": board_id,
-        "link":     link,
-        "media_source": {
-            "source_type": "media_id",
-            "media_id":    media_id,
-        },
-    }
-    if title:
-        body["title"] = title
-    if description:
-        body["description"] = description
-
-    resp   = _req("POST", "/pins", json=body)
-    pin_id = resp["id"]
-    log.info("Pinterest: created pin %s from media_id=%s on board=%s", pin_id, media_id, board_id)
-    return pin_id
-
-
 # ── Campaign management ───────────────────────────────────────────────────────
 
 def create_campaign(
