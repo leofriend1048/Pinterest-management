@@ -36,8 +36,9 @@ Digest structure (follow this exactly):
 3. **Budget Decisions** — what changed, why, ROAS basis
 4. **Ads Paused** — what got paused, why, spend to date
 5. **Anomalies** — P0/P1 items only; P2 omitted from digest
-6. **Weekly Opportunities** — include ONLY on Mondays when opportunity_report is present; omit this section on all other days
-7. **Top Observation** — one insight or opportunity worth acting on
+6. **Agent Actions** — include ONLY when orchestrator_actions is non-empty; for each action list: tool name, campaign, one-line rationale, predicted outcome. Omit this section entirely if the list is empty or absent.
+7. **Weekly Opportunities** — include ONLY on Mondays when opportunity_report is present; omit this section on all other days
+8. **Top Observation** — one insight or opportunity worth acting on. If calibration_summary is present and flags a prediction bias or correction, surface it briefly here.
 
 Tone: confident, brief, no filler. Write as if you manage the account yourself.
 Use specific numbers. No hedging. No "it appears" or "it seems."
@@ -50,6 +51,8 @@ def write_morning_digest(
     budget_decisions: list[dict],
     paused_ads: list[dict],
     opportunity_report: str | None = None,
+    orchestrator_actions: list[dict] | None = None,
+    calibration_summary: str | None = None,
 ) -> str:
     """
     Generate and return the morning digest text.
@@ -74,6 +77,8 @@ def write_morning_digest(
             if a.get("priority") in ("P0", "P1")
         ],
         "anomaly_summary":      anomaly_result.get("summary", ""),
+        "orchestrator_actions": orchestrator_actions or [],
+        "calibration_summary":  calibration_summary,
         "opportunity_report":   opportunity_report,
     }
 

@@ -27,13 +27,16 @@ _client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 _SYSTEM_PROMPT = """You are the PAMBS orchestrator — an AI media buying operator for Pinterest ads for Michael Todd Beauty (SonicSmooth).
 
-You have access to tools that execute real actions on the account. Use them to:
-  1. Balance spend for optimal ROAS — shift budget toward winning campaigns, trim underperformers
-  2. Graduate creatives with traction from discovery to scale
-  3. Pause underperforming ads or campaigns
-  4. Resume campaigns when retry windows have passed (e.g. consideration after 2–4 weeks)
-  5. Propose experiments (landing page tests, bid tests, consideration retry) — these require human approval
-  6. Add high-intent keywords when data supports it
+IMPORTANT: A rule-based budget engine and ad-pause auditor have ALREADY run before you. Their decisions are listed in the snapshot under `already_executed_today`. Do NOT duplicate their work:
+  - Do NOT re-budget a campaign that already received a budget change today (the one-change gate will block it anyway, but don't waste a tool call)
+  - Do NOT re-pause an ad the auditor already paused today
+
+Your role is STRATEGIC — act on things the rules cannot handle:
+  1. Propose experiments (landing page tests, bid tests, retry after pause window) — these require human approval
+  2. Resume campaigns when retry windows have passed (e.g. paused 3+ weeks → propose resume)
+  3. Diagnose root causes behind anomalies and propose hypotheses instead of blunt budget cuts
+  4. Graduate creatives with unusual traction the rule-based engine may not have caught yet
+  5. Flag ecosystem health signals (new visitor rate, frequency, CPM trends) as hypotheses
 
 CRITICAL: Every tool call MUST include:
   - rationale: Your full reasoning chain — why this action, what pattern or data drove it
@@ -52,7 +55,7 @@ If no actions are warranted, return no tool calls. It's better to hold than to a
 {skill_metadata}"""
 
 
-def _build_snapshot() -> dict:
+def _build_snapshot(context: dict | None = None) -> dict:
     """Build the full snapshot for the orchestrator."""
     yesterday = db.get_yesterday_summary()
     w7 = db.get_baseline_summary(7)
@@ -72,6 +75,14 @@ def _build_snapshot() -> dict:
             ).fetchall()
         ]
 
+    # already_executed_today: what the rule-based engines did this run
+    # Orchestrator must NOT duplicate these decisions.
+    already_executed_today = {
+        "budget_decisions": (context or {}).get("budget_decisions", []),
+        "paused_ads":       (context or {}).get("paused_ads", []),
+        "graduation_events": (context or {}).get("graduation_events", []),
+    }
+
     return {
         "snapshot_date": date.today().isoformat(),
         "brands": config.BRANDS,
@@ -84,6 +95,7 @@ def _build_snapshot() -> dict:
         "calibration_findings": calibration[:8],
         "pending_hypotheses": hypotheses[:5],
         "recent_agent_actions": recent_actions[:15],
+        "already_executed_today": already_executed_today,
     }
 
 
@@ -99,15 +111,20 @@ def _tools_for_api() -> list[dict]:
     ]
 
 
-def run_orchestrator() -> list[dict]:
+def run_orchestrator(context: dict | None = None) -> list[dict]:
     """
     Run the orchestrator agent. Returns list of executed actions.
+
+    Args:
+        context: Dict with keys 'budget_decisions', 'paused_ads', 'graduation_events'
+                 — what the rule-based engines already did this run. Used to populate
+                 already_executed_today so the orchestrator doesn't duplicate decisions.
     """
     if not getattr(config, "AGENT_LAB_ENABLED", True):
         log.info("Agent Lab disabled — skipping orchestrator.")
         return []
 
-    snapshot = _build_snapshot()
+    snapshot = _build_snapshot(context)
     max_actions = getattr(config, "ORCHESTRATOR_MAX_ACTIONS", 10)
 
     selected_skills = select_skills_for_snapshot(snapshot)

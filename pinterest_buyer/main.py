@@ -68,7 +68,7 @@ try:
         fatigue_detector,
     )
     from connectors import pinterest_connector as pinterest
-    from agents import anomaly_agent, narrative_agent, opportunity_agent
+    from agents import anomaly_agent, narrative_agent, opportunity_agent, orchestrator_agent, calibration_agent
     from notifications import slack
 except Exception as _e:
     _import_error = _e
@@ -90,11 +90,13 @@ log = logging.getLogger("pambs.main")
 
 # ── Stored digest state (populated during 3 AM run, posted at 7 AM) ───────────
 _digest_payload: dict = {
-    "anomaly_result":    {"anomalies": [], "summary": ""},
-    "graduation_events": [],
-    "budget_decisions":  [],
-    "paused_ads":        [],
-    "opportunity_report": None,
+    "anomaly_result":      {"anomalies": [], "summary": ""},
+    "graduation_events":   [],
+    "budget_decisions":    [],
+    "paused_ads":          [],
+    "orchestrator_actions": [],
+    "calibration_summary": None,
+    "opportunity_report":  None,
 }
 
 
@@ -303,7 +305,11 @@ def daily_run() -> None:
     4. Scale graduation check
     5. Budget optimization
     6. Ad-level pause audit
-    7. AI agent run (anomaly → narrative prep)
+    7. Daypart + keyword ingestion
+    8. Anomaly detection agent
+    9. Orchestrator agent (strategic decisions on top of rule-based engines)
+    10. Calibration review (Mondays only)
+    11. Opportunity agent (Mondays only)
     """
     global _digest_payload
 
@@ -379,7 +385,30 @@ def daily_run() -> None:
     except Exception as exc:
         log.error("Anomaly detection failed: %s", exc)
 
-    # Step 9 (Mondays): Opportunity agent
+    # Step 9: Orchestrator agent — strategic decisions on top of rule-based engines
+    log.info("Running orchestrator agent...")
+    orchestrator_actions: list[dict] = []
+    try:
+        orchestrator_actions = orchestrator_agent.run_orchestrator(context={
+            "budget_decisions":   budget_decisions,
+            "paused_ads":         paused_ads,
+            "graduation_events":  all_graduation_events,
+        })
+    except Exception as exc:
+        log.error("Orchestrator agent failed: %s", exc)
+
+    # Step 10 (Mondays): Calibration review — compare orchestrator predictions to actuals
+    calibration_summary: str | None = None
+    if _is_monday():
+        log.info("Monday — running calibration review...")
+        try:
+            cal_result = calibration_agent.run_calibration_review()
+            calibration_summary = cal_result.get("summary")
+            log.info("Calibration reviewed %d actions: %s", cal_result.get("actions_reviewed", 0), calibration_summary)
+        except Exception as exc:
+            log.error("Calibration review failed: %s", exc)
+
+    # Step 11 (Mondays): Opportunity agent
     opportunity_report: str | None = None
     if _is_monday():
         log.info("Monday — running opportunity agent...")
@@ -390,11 +419,13 @@ def daily_run() -> None:
 
     # Store for the 7 AM digest post
     _digest_payload = {
-        "anomaly_result":     anomaly_result,
-        "graduation_events":  all_graduation_events,
-        "budget_decisions":   budget_decisions,
-        "paused_ads":         paused_ads,
-        "opportunity_report": opportunity_report,
+        "anomaly_result":      anomaly_result,
+        "graduation_events":   all_graduation_events,
+        "budget_decisions":    budget_decisions,
+        "paused_ads":          paused_ads,
+        "orchestrator_actions": orchestrator_actions,
+        "calibration_summary": calibration_summary,
+        "opportunity_report":  opportunity_report,
     }
 
     elapsed = (datetime.now(_TZ) - start_ts).total_seconds()
@@ -411,6 +442,8 @@ def post_morning_digest() -> None:
             budget_decisions=_digest_payload["budget_decisions"],
             paused_ads=_digest_payload["paused_ads"],
             opportunity_report=_digest_payload.get("opportunity_report"),
+            orchestrator_actions=_digest_payload.get("orchestrator_actions"),
+            calibration_summary=_digest_payload.get("calibration_summary"),
         )
         slack.post_morning_digest(digest_text)
     except Exception as exc:

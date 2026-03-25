@@ -46,8 +46,16 @@ Priority definitions:
        delivery failure, CPM anomaly that will blow the budget.
   P1 — Needs attention within 24h. Examples: efficiency trend reversal, creative fatigue
        inflection, budget pacing off-track, scale campaign divergence.
+       ALWAYS classify as P1 when new_visitor percentage falls below the floor for the
+       campaign type for 2+ consecutive days:
+         discovery      → floor 70%  (healthy 80–95%)
+         scale_actalike → floor 40%  (healthy 50–75%)
+         scale_pplus    → floor 50%  (healthy 60–80%)
+         scale_broad    → floor 60%  (healthy 70–85%)
+       New visitor rate below floor = prospecting pool is shrinking = ecosystem health risk.
+       Tag these anomalies as campaign_type = the specific type, timeframe = "daily".
   P2 — Monitor. Examples: early signals worth watching, keyword drift, audience saturation
-       starting to show.
+       starting to show. New visitor rate trending toward floor but not yet breached = P2.
 
 Return ONLY valid JSON with this structure:
 {

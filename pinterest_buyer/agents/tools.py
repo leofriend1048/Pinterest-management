@@ -232,6 +232,7 @@ def execute_tool(tool_name: str, params: dict, source: str = "orchestrator") -> 
 def _execute_adjust_budget(params: dict, _log) -> dict:
     from state import db
     from connectors import pinterest_connector as pinterest
+    from datetime import date
 
     brand = params["brand"]
     campaign_type = params["campaign_type"]
@@ -243,6 +244,22 @@ def _execute_adjust_budget(params: dict, _log) -> dict:
         return _business_error(f"No active {campaign_type} campaign for {brand}", action_id)
 
     camp = campaigns[0]
+
+    # One-change gate: prevent double-budgeting if budget engine already acted today
+    today = date.today().isoformat()
+    with db.get_db() as conn:
+        already_changed = conn.execute(
+            "SELECT 1 FROM decision_audit WHERE campaign_id=? AND DATE(timestamp)=? LIMIT 1",
+            (camp["campaign_id"], today),
+        ).fetchone()
+    if already_changed:
+        action_id = _log(False)
+        return _business_error(
+            f"One-change gate: {campaign_type} for {brand} already received a budget change today. "
+            "Skipping to prevent double-actioning.",
+            action_id,
+        )
+
     pin_id = camp.get("pinterest_campaign_id") or camp["campaign_id"]
     prior = camp["budget_usd"]
 
