@@ -25,7 +25,6 @@ from datetime import date, timedelta
 
 import config
 from connectors import pinterest_connector as pinterest
-from notifications import slack
 from state import db
 
 log = logging.getLogger(__name__)
@@ -254,19 +253,6 @@ def run_ad_pause_audit() -> list[dict]:
                     "reason":        reason,
                 }
                 paused_events.append(event)
-
-                slack.alert_ad_paused(
-                    ad_id=ad_id,
-                    ad_name=ad_name,
-                    campaign_type=camp["campaign_type"],
-                    brand=brand,
-                    spend_usd=spend_7d,
-                    roas=roas_w,
-                    reason=reason,
-                    roas_1d=event["roas_1d"],
-                    roas_3d=event["roas_3d"],
-                    roas_7d=event["roas_7d"],
-                )
 
     log.info("Ad pause audit complete — %d ads paused.", len(paused_events))
     return paused_events

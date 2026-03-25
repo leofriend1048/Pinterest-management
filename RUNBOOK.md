@@ -19,7 +19,7 @@ Every night at 3 AM the system pulls performance data, makes budget and creative
 | 3:00 AM Monday | Above + weekly discovery campaign launch + opportunity agent |
 | 3:00 AM first Monday of month | Above + monthly Performance+ challenger launch |
 | 7:00 AM daily | Morning digest posted to `#pinterest-automated` |
-| Real-time | Graduation alerts, budget change alerts, pause alerts, P0 anomaly alerts |
+| 7:00 AM daily | Morning digest — all events, decisions, anomalies, and (on Mondays) opportunity analysis |
 
 ---
 
@@ -192,8 +192,8 @@ Receives a structured JSON snapshot of account performance at four timeframes (d
 
 | Priority | Meaning | Response |
 |---|---|---|
-| P0 | Requires immediate attention — spend spike/collapse, delivery failure, CPM blow-up | Real-time Slack alert |
-| P1 | Needs attention within 24h — trend reversal, fatigue inflection, pacing problem | Bundled into morning digest |
+| P0 | Requires immediate attention — spend spike/collapse, delivery failure, CPM blow-up | Morning digest (highlighted) |
+| P1 | Needs attention within 24h — trend reversal, fatigue inflection, pacing problem | Morning digest |
 | P2 | Watch only — early signals, keyword drift, audience saturation starting | Logged, not alerted |
 
 The agent states for each anomaly: what changed, magnitude, most likely root cause, and a specific recommended action.
@@ -223,15 +223,12 @@ Posted to `#pinterest-automated` at the end of the Monday 3 AM run. Covers:
 
 ## Slack alert reference
 
-| Alert | Cadence | Triggered by |
+The system sends **one Slack message per day** — the 7 AM morning digest. There are no separate real-time alerts. All events (graduations, budget changes, ad pauses, anomalies, Monday opportunity analysis) are bundled into the single digest.
+
+| Content | Cadence | Source |
 |---|---|---|
-| Morning digest | 7 AM daily | Narrative agent |
-| Creative graduated | Real-time | Graduation engine |
-| P0 anomaly | Real-time | Anomaly agent |
-| Budget change (↑ or ↓) | Real-time | Budget engine |
-| Campaign paused | Real-time | Budget engine |
-| Ad paused | Real-time | Ad pause auditor |
-| Weekly opportunity update | Monday after 3 AM run | Opportunity agent |
+| Morning digest (all events + scorecard) | 7 AM daily | Narrative agent |
+| Weekly opportunities section | Mondays only (inside digest) | Opportunity agent |
 
 ---
 
@@ -297,7 +294,7 @@ python -m pinterest_buyer.main --digest-only
 | `creative_mirror` | Every Meta creative the system has seen — Pinterest pin IDs, composite score, graduation status, asset path |
 | `campaign_log` | All active campaigns, current budget, brand, type, launch date |
 | `decision_audit` | Every budget decision ever made — timestamp, ROAS basis (1d/3d/7d/weighted), prior budget, new budget, full rationale |
-| `performance_snapshots` | Daily metrics per campaign and per ad: spend, ROAS, NCPA, frequency, impressions |
+| `performance_snapshots` | Daily metrics per campaign and per ad: spend, ROAS, NCPA, impressions |
 | `graduation_log` | Every graduation event — creative, brand, spend and ROAS at graduation, which campaigns entered |
 | `keyword_performance` | Keyword-level impressions, clicks, conversions, ROAS per brand, updated daily |
 | `daypart_log` | Hourly spend + revenue per brand for the dayparting efficiency tracker |

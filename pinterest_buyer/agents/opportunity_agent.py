@@ -21,7 +21,6 @@ from intelligence.fatigue_detector import (
     get_daypart_recommendations,
     get_format_performance,
 )
-from notifications import slack
 from state import db
 
 log = logging.getLogger(__name__)
@@ -154,6 +153,5 @@ def run_opportunity_analysis() -> str:
     )
 
     report = response.content[0].text.strip()
-    slack.post_weekly_opportunity_update(report)
     log.info("Opportunity agent complete (%d chars).", len(report))
     return report

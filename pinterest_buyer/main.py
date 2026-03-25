@@ -90,10 +90,11 @@ log = logging.getLogger("pambs.main")
 
 # ── Stored digest state (populated during 3 AM run, posted at 7 AM) ───────────
 _digest_payload: dict = {
-    "anomaly_result":   {"anomalies": [], "summary": ""},
+    "anomaly_result":    {"anomalies": [], "summary": ""},
     "graduation_events": [],
-    "budget_decisions": [],
-    "paused_ads":       [],
+    "budget_decisions":  [],
+    "paused_ads":        [],
+    "opportunity_report": None,
 }
 
 
@@ -379,28 +380,22 @@ def daily_run() -> None:
         log.error("Anomaly detection failed: %s", exc)
 
     # Step 9 (Mondays): Opportunity agent
+    opportunity_report: str | None = None
     if _is_monday():
         log.info("Monday — running opportunity agent...")
         try:
-            opportunity_agent.run_opportunity_analysis()
+            opportunity_report = opportunity_agent.run_opportunity_analysis()
         except Exception as exc:
             log.error("Opportunity agent failed: %s", exc)
 
     # Store for the 7 AM digest post
     _digest_payload = {
-        "anomaly_result":    anomaly_result,
-        "graduation_events": all_graduation_events,
-        "budget_decisions":  budget_decisions,
-        "paused_ads":        paused_ads,
+        "anomaly_result":     anomaly_result,
+        "graduation_events":  all_graduation_events,
+        "budget_decisions":   budget_decisions,
+        "paused_ads":         paused_ads,
+        "opportunity_report": opportunity_report,
     }
-
-    # If shadow mode, post a Slack summary of what would have happened
-    if config.SHADOW_MODE:
-        simulated = [d for d in budget_decisions if d.get("action") != "hold"]
-        simulated += [{"action": "pause_ad", **a} for a in paused_ads]
-        simulated += [{"action": "graduation", **g} for g in all_graduation_events]
-        if simulated:
-            slack.post_shadow_summary(simulated)
 
     elapsed = (datetime.now(_TZ) - start_ts).total_seconds()
     log.info("═══ PAMBS daily run complete in %.0fs ═══", elapsed)
@@ -415,6 +410,7 @@ def post_morning_digest() -> None:
             graduation_events=_digest_payload["graduation_events"],
             budget_decisions=_digest_payload["budget_decisions"],
             paused_ads=_digest_payload["paused_ads"],
+            opportunity_report=_digest_payload.get("opportunity_report"),
         )
         slack.post_morning_digest(digest_text)
     except Exception as exc:

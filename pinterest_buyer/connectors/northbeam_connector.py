@@ -224,7 +224,8 @@ def _run_export(level: str, platform: str, days: int) -> list[dict]:
         "metrics": [
             {"id": "spend"},
             {"id": "rev"},
-            {"id": "roas"},   # may not be available on all accounts — fallback below
+            {"id": "roas"},          # may not be available on all accounts — fallback below
+            {"id": "new_visitors"},  # % new visits signal — may not be on all accounts
         ],
     }
 
@@ -289,11 +290,15 @@ def _parse_rows(rows: list[dict], id_candidates: list[str]) -> dict[str, dict]:
         conversions = int(_parse_float(
             row.get("transactions") or row.get("Transactions") or 0
         ))
+        new_visitors = _parse_float(
+            row.get("new_visitors") or row.get("New Visitors") or row.get("new_visitor_sessions") or 0
+        )
         result[entity_id] = {
-            "spend":       spend,
-            "revenue":     revenue,
-            "roas":        roas,
-            "conversions": conversions,
+            "spend":        spend,
+            "revenue":      revenue,
+            "roas":         roas,
+            "conversions":  conversions,
+            "new_visitors": new_visitors,
         }
     return result
 

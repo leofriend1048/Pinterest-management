@@ -9,7 +9,7 @@ Tier  | ROAS vs target  | Action          | Cap
   2   | 110–129%        | Nudge UP 10%    | $200/day
   3   | 90–109%         | Hold            | —
   4   | 70–89%          | Nudge DOWN 15%  | —
-  5   | < 70%           | Pause campaign  | Slack flag
+  5   | < 70%           | Pause campaign  | logged
 
 ROAS signal: weighted across three lookback windows
   yesterday (1d)  50%
@@ -34,7 +34,6 @@ from datetime import date, timedelta
 
 import config
 from connectors import northbeam_connector, pinterest_connector as pinterest
-from notifications import slack
 from state import db
 
 log = logging.getLogger(__name__)
@@ -350,27 +349,11 @@ def run_budget_optimization() -> list[dict]:
             pinterest.update_campaign_budget(pin_id, action["new_budget_usd"])
             db.update_campaign_budget(campaign_id, action["new_budget_usd"])
             db.log_decision(action)
-            slack.alert_budget_change(
-                campaign_id=campaign_id,
-                campaign_type=camp["campaign_type"],
-                brand=camp["brand"],
-                old_budget=action["prior_budget_usd"],
-                new_budget=action["new_budget_usd"],
-                roas_basis=action["roas_basis"],
-                rationale=action["rationale"],
-            )
 
         elif action["action"] == "pause":
             pinterest.pause_campaign(pin_id)
             db.pause_campaign(campaign_id)
             db.log_decision(action)
-            slack.alert_campaign_paused(
-                campaign_id=campaign_id,
-                campaign_type=camp["campaign_type"],
-                brand=camp["brand"],
-                roas=action["roas_basis"],
-                reason=action["rationale"],
-            )
 
         else:  # hold
             db.log_decision(action)

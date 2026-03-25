@@ -6,7 +6,7 @@ When a creative clears $300 spend AND ROAS ≥ 0.9× target ROAS,
 add it simultaneously to all four scale campaigns for that brand.
 
 The creative stays active in the discovery campaign after graduation.
-Graduation fires a real-time Slack alert.
+Graduations are reported in the morning digest.
 """
 
 import logging
@@ -14,7 +14,6 @@ from datetime import date, timedelta
 
 import config
 from connectors import pinterest_connector as pinterest
-from notifications import slack
 from state import db
 
 log = logging.getLogger(__name__)
@@ -217,17 +216,6 @@ def run_graduation_check(brand: str) -> list[dict]:
             already_graduated.add(meta_id)
             events.append({**event, "ad_name": ad_name})
 
-            # Real-time Slack alert
-            campaign_type_labels = [
-                t for t, cid in scale_campaigns.items() if cid in entered
-            ]
-            slack.alert_graduation(
-                creative_name=ad_name,
-                brand=brand,
-                spend_usd=spend,
-                roas=roas,
-                scale_campaigns=campaign_type_labels,
-            )
             log.info("[%s] Graduated %s (spend=$%.0f, ROAS=%.2f)", brand, ad_name, spend, roas)
 
     log.info("[%s] Graduation check complete — %d creatives graduated.", brand, len(events))

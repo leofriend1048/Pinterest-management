@@ -5,9 +5,8 @@ Receives a structured snapshot of account performance across four timeframes
 (daily, weekly, monthly, quarterly), sends it to Claude, and returns a
 structured list of anomalies classified as P0, P1, or P2.
 
-P0 → real-time Slack alert
-P1 → bundled into morning digest
-P2 → monitor (logged, not alerted)
+P0/P1 → bundled into morning digest
+P2    → monitor (logged, not alerted)
 """
 
 import json
@@ -17,7 +16,7 @@ from datetime import date, timedelta
 import anthropic
 
 import config
-from notifications import slack
+from connectors import northbeam_connector
 from state import db
 
 log = logging.getLogger(__name__)
@@ -69,6 +68,17 @@ def _build_snapshot() -> dict:
     w30_base   = _window(30)
     w90_base   = _window(90)
 
+    # Fetch new_visitors from Northbeam for 1d and 7d windows
+    try:
+        nb_1d = northbeam_connector.fetch_multiwindow_campaign_roas(windows=(1,)).get(1, {})
+        nb_7d = northbeam_connector.fetch_multiwindow_campaign_roas(windows=(7,)).get(7, {})
+        new_visitors_1d = {cid: d.get("new_visitors", 0) for cid, d in nb_1d.items()}
+        new_visitors_7d = {cid: d.get("new_visitors", 0) for cid, d in nb_7d.items()}
+    except Exception as exc:
+        log.warning("Could not fetch new_visitors from Northbeam: %s", exc)
+        new_visitors_1d = {}
+        new_visitors_7d = {}
+
     # Recent budget decisions
     with db.get_db() as conn:
         recent_decisions = [
@@ -105,6 +115,11 @@ def _build_snapshot() -> dict:
         },
         "recent_budget_decisions": recent_decisions,
         "recent_graduations":      recent_graduations,
+        "new_visitors": {
+            "yesterday_by_campaign": new_visitors_1d,
+            "7d_by_campaign":        new_visitors_7d,
+            "description": "Count of new (first-time) visitors attributed to each campaign by Northbeam",
+        },
     }
 
 
@@ -160,17 +175,6 @@ def run_anomaly_detection() -> dict:
     except json.JSONDecodeError as exc:
         log.error("Anomaly agent returned invalid JSON: %s", exc)
         result = {"anomalies": [], "summary": "Anomaly detection failed — invalid JSON response."}
-
-    # Fire P0 alerts in real-time
-    for anomaly in result.get("anomalies", []):
-        if anomaly.get("priority") == "P0":
-            slack.alert_p0_anomaly(
-                brand=anomaly.get("brand", "unknown"),
-                what_changed=anomaly.get("what_changed", ""),
-                magnitude=anomaly.get("magnitude", ""),
-                root_cause=anomaly.get("root_cause", ""),
-                recommended_action=anomaly.get("recommended_action", ""),
-            )
 
     p_counts = {"P0": 0, "P1": 0, "P2": 0}
     for a in result.get("anomalies", []):
