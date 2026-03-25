@@ -357,10 +357,14 @@ def _execute_propose_hypothesis(params: dict, _log) -> dict:
     })
     action_id = _log(True)
     if config.SLACK_ENABLED:
-        slack.post_new_hypothesis(
+        setup = params.get("setup_json") or {}
+        slack.post_hypothesis(
+            brand=params.get("brand", "michael_todd_beauty"),
+            observation=setup.get("observation", params.get("rationale", "")),
             hypothesis=params["hypothesis"],
-            rationale=params.get("rationale", ""),
-            experiment_type=params.get("experiment_type", ""),
+            prediction=setup.get("prediction", setup.get("success_metric", "")),
+            test=setup.get("test", ""),
+            kill_switch=setup.get("kill_switch", "Not specified"),
         )
     return {"success": True, "detail": "Hypothesis added to backlog for approval", "action_id": action_id}
 

@@ -61,8 +61,8 @@ def _build_snapshot() -> dict:
     campaigns = db.get_active_campaigns()
     campaigns += [dict(c) for c in db.get_campaigns(statuses=("paused",))]
 
-    learnings = agent_tools.get_learnings_for_context()
-    calibration = agent_tools.get_calibration_findings()
+    learnings = agent_tools.get_learnings_for_context(brand="michael_todd_beauty")
+    calibration = agent_tools.get_calibration_findings(limit=8)
     hypotheses = agent_tools.get_pending_hypotheses()
 
     with db.get_db() as conn:
@@ -80,8 +80,8 @@ def _build_snapshot() -> dict:
         "yesterday": yesterday,
         "baseline_7d": w7,
         "baseline_14d": w14,
-        "learnings": learnings[:15],
-        "calibration_findings": calibration[:5],
+        "learnings": learnings[:10],
+        "calibration_findings": calibration[:8],
         "pending_hypotheses": hypotheses[:5],
         "recent_agent_actions": recent_actions[:15],
     }
@@ -110,20 +110,33 @@ def run_orchestrator() -> list[dict]:
     snapshot = _build_snapshot()
     max_actions = getattr(config, "ORCHESTRATOR_MAX_ACTIONS", 10)
 
-    system = _SYSTEM_PROMPT.format(
-        max_actions=max_actions,
-        skill_metadata=list_skill_metadata(),
-    )
-
     selected_skills = select_skills_for_snapshot(snapshot)
     playbook_context = build_skill_context(selected_skills)
     log.info("Orchestrator loading skills: %s", selected_skills)
 
+    # System prompt as a list of blocks. The playbook block carries cache_control
+    # so it is cached by Anthropic for the duration of the tool-use loop —
+    # preventing it from being re-billed on every round (up to 10 rounds/run).
+    system: list[dict] = [
+        {
+            "type": "text",
+            "text": _SYSTEM_PROMPT.format(
+                max_actions=max_actions,
+                skill_metadata=list_skill_metadata(),
+            ),
+        },
+    ]
+    if playbook_context:
+        system.append({
+            "type": "text",
+            "text": playbook_context,
+            "cache_control": {"type": "ephemeral"},
+        })
+
     user_content = (
         "Review the account snapshot below. Decide which actions to take. "
         "Use your tools — each call must include rationale and predicted_outcome.\n\n"
-        + (playbook_context + "\n\n" if playbook_context else "")
-        + f"```json\n{json.dumps(snapshot, indent=2, default=str)}\n```"
+        f"```json\n{json.dumps(snapshot, indent=2, default=str)}\n```"
     )
 
     messages = [{"role": "user", "content": user_content}]

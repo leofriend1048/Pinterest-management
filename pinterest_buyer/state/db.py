@@ -10,6 +10,11 @@ performance_snapshots  – Daily metrics per campaign and ad
 graduation_log         – Creative graduation events
 keyword_performance    – Keyword-level stats per brand
 daypart_log            – Hourly spend/revenue for dayparting analysis
+agent_action_log       – Every tool call: rationale, predicted outcome, actual outcome
+calibration_findings   – Systematic prediction errors surfaced by calibration agent
+experiments            – Hypothesis experiments proposed and tracked
+learnings              – Experiment results and persistent learnings
+hypothesis_backlog     – Proposed experiments awaiting human approval
 """
 
 import sqlite3
@@ -160,6 +165,71 @@ def init_db() -> None:
 
         CREATE UNIQUE INDEX IF NOT EXISTS idx_daypart_unique
             ON daypart_log(log_date, hour_utc, brand);
+
+        CREATE TABLE IF NOT EXISTS agent_action_log (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp         TEXT DEFAULT (datetime('now')),
+            tool_name         TEXT NOT NULL,
+            brand             TEXT,
+            params_json       TEXT,
+            rationale         TEXT,
+            predicted_outcome TEXT,
+            actual_outcome    TEXT,
+            executed          INTEGER DEFAULT 0,
+            measured          INTEGER DEFAULT 0,
+            source            TEXT DEFAULT 'orchestrator'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_action_log_brand
+            ON agent_action_log(brand, timestamp);
+
+        CREATE TABLE IF NOT EXISTS calibration_findings (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            finding_type          TEXT NOT NULL,
+            pattern               TEXT,
+            evidence              TEXT,
+            recommended_correction TEXT,
+            action_ids            TEXT,
+            created_at            TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS experiments (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            brand           TEXT,
+            campaign_type   TEXT,
+            experiment_type TEXT,
+            hypothesis      TEXT,
+            setup_json      TEXT,
+            status          TEXT DEFAULT 'proposed',
+            created_at      TEXT DEFAULT (datetime('now')),
+            updated_at      TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS learnings (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            experiment_id INTEGER REFERENCES experiments(id),
+            brand         TEXT,
+            campaign_type TEXT,
+            learning      TEXT NOT NULL,
+            evidence      TEXT,
+            created_at    TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_learnings_brand
+            ON learnings(brand, campaign_type);
+
+        CREATE TABLE IF NOT EXISTS hypothesis_backlog (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            hypothesis      TEXT NOT NULL,
+            rationale       TEXT,
+            experiment_type TEXT,
+            brand           TEXT,
+            campaign_type   TEXT,
+            setup_json      TEXT,
+            status          TEXT DEFAULT 'proposed',
+            proposed_by     TEXT DEFAULT 'agent',
+            created_at      TEXT DEFAULT (datetime('now'))
+        );
         """)
     log.info("Database initialised at %s", config.DB_PATH)
 
@@ -439,3 +509,101 @@ def get_daypart_data(brand: str, rolling_days: int = 14) -> list[dict]:
             ORDER BY hour_utc
         """, (brand, f"-{rolling_days} days")).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── agent_action_log helpers ──────────────────────────────────────────────────
+
+def log_agent_action(record: dict) -> int:
+    """Log a tool execution. Returns the inserted row id."""
+    record.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+    if isinstance(record.get("params_json"), dict):
+        record["params_json"] = json.dumps(record["params_json"])
+    with get_db() as conn:
+        cursor = conn.execute("""
+            INSERT INTO agent_action_log (
+                timestamp, tool_name, brand, params_json,
+                rationale, predicted_outcome, executed, source
+            ) VALUES (
+                :timestamp, :tool_name, :brand, :params_json,
+                :rationale, :predicted_outcome, :executed, :source
+            )
+        """, record)
+        return cursor.lastrowid
+
+
+def get_unmeasured_actions(min_age_days: int = 14) -> list[dict]:
+    """Return executed actions old enough to have measurable outcomes."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT * FROM agent_action_log
+            WHERE executed = 1
+              AND measured = 0
+              AND timestamp <= datetime('now', ?)
+            ORDER BY timestamp ASC
+        """, (f"-{min_age_days} days",)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_action_outcome(action_id: int, actual_outcome: str) -> None:
+    """Write the actual outcome and mark action as measured."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE agent_action_log SET actual_outcome=?, measured=1 WHERE id=?",
+            (actual_outcome, action_id),
+        )
+
+
+# ── calibration_findings helpers ──────────────────────────────────────────────
+
+def insert_calibration_finding(finding: dict) -> None:
+    if isinstance(finding.get("action_ids"), list):
+        finding["action_ids"] = json.dumps(finding["action_ids"])
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO calibration_findings (
+                finding_type, pattern, evidence, recommended_correction, action_ids
+            ) VALUES (
+                :finding_type, :pattern, :evidence, :recommended_correction, :action_ids
+            )
+        """, finding)
+
+
+# ── hypothesis_backlog helpers ────────────────────────────────────────────────
+
+def insert_hypothesis(record: dict) -> int:
+    if isinstance(record.get("setup_json"), dict):
+        record["setup_json"] = json.dumps(record["setup_json"])
+    with get_db() as conn:
+        cursor = conn.execute("""
+            INSERT INTO hypothesis_backlog (
+                hypothesis, rationale, experiment_type, brand,
+                campaign_type, setup_json, proposed_by
+            ) VALUES (
+                :hypothesis, :rationale, :experiment_type, :brand,
+                :campaign_type, :setup_json, :proposed_by
+            )
+        """, record)
+        return cursor.lastrowid
+
+
+# ── campaign_log extra helpers ────────────────────────────────────────────────
+
+def get_campaigns(brand: str | None = None, statuses: tuple = ("active",)) -> list[dict]:
+    """Fetch campaigns filtered by one or more statuses."""
+    placeholders = ",".join("?" for _ in statuses)
+    params: list = list(statuses)
+    query = f"SELECT * FROM campaign_log WHERE status IN ({placeholders})"
+    if brand:
+        query += " AND brand=?"
+        params.append(brand)
+    with get_db() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def resume_campaign(campaign_id: str) -> None:
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE campaign_log SET status='active' WHERE campaign_id=?",
+            (campaign_id,),
+        )
