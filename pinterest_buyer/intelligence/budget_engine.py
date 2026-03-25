@@ -220,7 +220,32 @@ def _decide(
         )
 
     elif ratio >= config.ROAS_HOLD_LOWER:
-        pass  # hold, defaults set above
+        # Marginal profit check: would a 10% spend increase add net profit
+        # while keeping estimated ROAS at or above TARGET_ROAS?
+        estimated_roas = w_roas * (1 - config.MARGINAL_ROAS_COMPRESSION)
+        proposed_budget = current_budget * (1 + config.BUDGET_SCALE_UP_LIGHT_PCT)
+        current_profit_proxy  = w_roas * current_budget
+        proposed_profit_proxy = estimated_roas * proposed_budget
+        if (
+            estimated_roas >= target_roas
+            and proposed_profit_proxy > current_profit_proxy
+            and proposed_budget <= config.BUDGET_SCALE_UP_LIGHT_CAP
+        ):
+            new_budget = max(
+                min(proposed_budget, config.BUDGET_SCALE_UP_LIGHT_CAP),
+                floor,
+            )
+            action.update(
+                action="nudge_up",
+                new_budget_usd=round(new_budget, 2),
+                rationale=(
+                    f"{window_str} — hold zone but marginal profit positive "
+                    f"(est. ROAS at +10% spend: {estimated_roas:.2f}x ≥ floor {target_roas:.2f}x; "
+                    f"revenue proxy ${proposed_profit_proxy:.0f} vs ${current_profit_proxy:.0f}); "
+                    f"nudging UP 10% to ${new_budget:.0f}/day."
+                ),
+            )
+        # else: hold — marginal dollars would drop below floor or not add profit
 
     elif ratio >= config.ROAS_NUDGE_DOWN:
         new_budget = max(

@@ -162,10 +162,10 @@ MIN_SPEND_FOR_DECISION = 50.0
 MIN_RUNTIME_DAYS       = 3
 BUDGET_CHANGES_PER_DAY = 1
 
-# Budget scale thresholds
+# Budget scale thresholds (ratios of TARGET_ROAS)
 ROAS_SCALE_UP_STRONG = 1.30   # ≥130% → +25%, cap $500/day
 ROAS_SCALE_UP_LIGHT  = 1.10   # 110–129% → +10%, cap $200/day
-ROAS_HOLD_LOWER      = 0.90   # 90–109% → hold
+ROAS_HOLD_LOWER      = 0.90   # 90–109% → hold (+ marginal profit check)
 ROAS_NUDGE_DOWN      = 0.70   # 70–89% → -15%
 ROAS_PAUSE_CAMPAIGN  = 0.70   # <70% → pause + flag
 
@@ -175,11 +175,25 @@ BUDGET_SCALE_UP_LIGHT_PCT  = 0.10
 BUDGET_SCALE_UP_LIGHT_CAP  = 200.0
 BUDGET_NUDGE_DOWN_PCT      = 0.15
 
+# Marginal profit optimization — estimated ROAS compression per 10% spend increase.
+# A campaign at 2.88× ROAS scaled 10% is estimated to run at 2.88 × (1 − 0.05) = 2.74×.
+# If that still clears TARGET_ROAS and total revenue proxy increases, we scale.
+MARGINAL_ROAS_COMPRESSION = 0.05
+
 # ── Ad-level pause rules ──────────────────────────────────────────────────────
 AD_PAUSE_ROAS_FLOOR          = 0.70   # × target
 AD_PAUSE_MIN_SPEND_USD       = 150.0
 AD_PAUSE_MIN_RUNTIME_DAYS    = 3
 AD_PAUSE_DECAY_THRESHOLD     = 0.30   # 30% drop from week-1 ROAS
+
+# ── New visitor rate benchmarks by campaign type ──────────────────────────────
+# Healthy new visitor % range. Below the floor triggers a P1 ecosystem health flag.
+NEW_VISITOR_RATE_BENCHMARKS = {
+    "discovery":      {"healthy_min": 0.80, "healthy_max": 0.95, "floor": 0.70},
+    "scale_actalike": {"healthy_min": 0.50, "healthy_max": 0.75, "floor": 0.40},
+    "scale_pplus":    {"healthy_min": 0.60, "healthy_max": 0.80, "floor": 0.50},
+    "scale_broad":    {"healthy_min": 0.70, "healthy_max": 0.85, "floor": 0.60},
+}
 
 # ── Creative scoring weights ──────────────────────────────────────────────────
 WEIGHT_ROAS      = 0.45

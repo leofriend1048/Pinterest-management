@@ -124,31 +124,27 @@ def select_skills_for_snapshot(snapshot: dict) -> list[str]:
     Determine which skills are relevant for a given account snapshot.
     Returns a list of skill names to load (Level 2 selective loading).
 
-    Always loads budget-optimization — budget decisions happen every run.
-    Loads creative-management if there are graduation candidates or paused ads.
-    Loads campaign-operations if there are paused campaigns or pending hypotheses.
+    Always loads:
+      - growth-marketer-playbook — foundational decision framework for every run
+      - budget-optimization — budget decisions happen every run
+
+    Conditionally loads:
+      - creative-management — always, as creatives are evaluated every run
+      - campaign-operations — if paused campaigns, pending hypotheses, or recent
+                              campaign-level actions exist
     """
-    skills = ["budget-optimization"]
+    # Core skills loaded on every run
+    skills = ["growth-marketer-playbook", "budget-optimization", "creative-management"]
 
     campaigns = snapshot.get("campaigns", [])
     paused_campaigns = [c for c in campaigns if c.get("status") == "paused"]
     pending_hypotheses = snapshot.get("pending_hypotheses", [])
     recent_actions = snapshot.get("recent_agent_actions", [])
 
-    # Creative management: load if creatives have been graduated/paused recently
-    # or if there's any creative-related context in the snapshot
-    creative_action_names = {"graduate_creative", "pause_creative", "resume_creative"}
-    recent_creative_activity = any(
-        a.get("tool_name") in creative_action_names for a in recent_actions
-    )
-    # Always load — creatives are evaluated on every run
-    skills.append("creative-management")
-
     # Campaign operations: load if paused campaigns exist or hypotheses are pending
     if paused_campaigns or pending_hypotheses:
         skills.append("campaign-operations")
     else:
-        # Check recent actions for campaign-level activity
         campaign_action_names = {"pause_campaign", "resume_campaign", "propose_hypothesis", "add_keyword"}
         if any(a.get("tool_name") in campaign_action_names for a in recent_actions):
             skills.append("campaign-operations")

@@ -206,3 +206,116 @@ def post_shadow_summary(actions: list[dict]) -> None:
         )
     _post([_section("\n".join(lines))], text="[PAMBS SHADOW] Simulated actions")
     log.info("Slack: shadow summary posted (%d actions)", len(actions))
+
+
+def post_calibration_summary(
+    actions_reviewed: int,
+    findings: list[dict],
+    summary: str,
+) -> None:
+    """Post calibration agent findings — systematic prediction errors surfaced."""
+    finding_lines = []
+    for f in findings:
+        if f.get("finding_type") == "no_pattern":
+            continue
+        finding_lines.append(
+            f"• *{f.get('finding_type', '').replace('_', ' ').title()}*: "
+            f"{f.get('pattern', '')}\n"
+            f"  _Evidence:_ {f.get('evidence', '')}\n"
+            f"  _Correction:_ {f.get('recommended_correction', '')}"
+        )
+    body = summary
+    if finding_lines:
+        body = summary + "\n\n" + "\n\n".join(finding_lines)
+    blocks = [
+        _header(f"🔬 Calibration Review — {actions_reviewed} Actions Analysed"),
+        _divider(),
+        _section(body),
+    ]
+    _post(blocks, text=f"[PAMBS] Calibration review: {len(findings)} finding(s)")
+    log.info("Slack: calibration summary posted (%d findings)", len(findings))
+
+
+def post_hypothesis(
+    brand: str,
+    observation: str,
+    hypothesis: str,
+    prediction: str,
+    test: str,
+    kill_switch: str,
+) -> None:
+    """Post a structured hypothesis formed by the agent for human review."""
+    brand_label = brand.replace("_", " ").title()
+    blocks = [
+        _header("🧪 Hypothesis Formed — Awaiting Approval"),
+        _section(
+            f"*Brand:* {brand_label}\n\n"
+            f"*Observation:* {observation}\n\n"
+            f"*Hypothesis:* {hypothesis}\n\n"
+            f"*Prediction:* {prediction}\n\n"
+            f"*Test:* {test}\n\n"
+            f"*Kill switch:* {kill_switch}"
+        ),
+    ]
+    _post(blocks, text=f"[PAMBS] Hypothesis — {brand_label}: {hypothesis[:80]}")
+    log.info("Slack: hypothesis posted for %s", brand)
+
+
+def alert_ecosystem_health(
+    brand: str,
+    campaign_type: str,
+    new_visitor_pct: float,
+    floor_pct: float,
+    days_below_floor: int,
+    recommended_action: str,
+) -> None:
+    """P1 alert: new visitor rate has dropped below benchmark for a prospecting campaign."""
+    brand_label = brand.replace("_", " ").title()
+    blocks = [
+        _header("🌱 Ecosystem Health Alert — P1"),
+        _section(
+            f"*Brand:* {brand_label}\n"
+            f"*Campaign:* {campaign_type}\n"
+            f"*New visitor rate:* {new_visitor_pct*100:.0f}% "
+            f"(floor: {floor_pct*100:.0f}%) — below benchmark for {days_below_floor}d\n"
+            f"*Risk:* Retargeting pool is shrinking. Lower-funnel ROAS will follow in 30–60 days.\n"
+            f"*Recommended action:* {recommended_action}"
+        ),
+    ]
+    _post(blocks, text=f"[PAMBS] Ecosystem P1 — {brand_label} {campaign_type} new visitor rate low")
+    log.warning(
+        "Slack: ecosystem health P1 for %s/%s — %.0f%% new visitors (floor %.0f%%)",
+        brand, campaign_type, new_visitor_pct * 100, floor_pct * 100,
+    )
+
+
+def alert_leading_indicator(
+    brand: str,
+    campaign_type: str,
+    signal: str,
+    current_value: str,
+    baseline_value: str,
+    days_declining: int,
+    interpretation: str,
+) -> None:
+    """P1 alert: a leading indicator (CTR, hook rate, frequency) is trending before ROAS moves."""
+    brand_label = brand.replace("_", " ").title()
+    blocks = [
+        _header("📉 Leading Indicator Alert — P1"),
+        _section(
+            f"*Brand:* {brand_label}\n"
+            f"*Campaign:* {campaign_type}\n"
+            f"*Signal:* {signal}\n"
+            f"*Current:* {current_value} vs baseline {baseline_value} "
+            f"— declining for {days_declining}d\n"
+            f"*Interpretation:* {interpretation}"
+        ),
+    ]
+    _post(
+        blocks,
+        text=f"[PAMBS] Leading indicator P1 — {brand_label} {campaign_type}: {signal}",
+    )
+    log.warning(
+        "Slack: leading indicator P1 for %s/%s — %s declining %dd",
+        brand, campaign_type, signal, days_declining,
+    )
