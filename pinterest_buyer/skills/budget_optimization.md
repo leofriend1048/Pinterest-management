@@ -11,12 +11,12 @@ Never act on a single day's ROAS. Always use the weighted composite across three
 
 | Window | Weight |
 |--------|--------|
-| Yesterday (1d) | 50% |
+| Yesterday (1d) | 20% |
 | Last 3 days    | 30% |
-| Last 7 days    | 20% |
+| Last 7 days    | 50% |
 
 If a window has no data (zero ROAS), exclude it and renormalise the remaining weights.
-Yesterday carries the most weight — it is the strongest leading indicator. The 7d window provides stability against single-day volatility.
+The 7-day window carries the most weight — it provides a stable signal. Yesterday is a smaller leading indicator only.
 
 ## Five-Tier Decision Framework
 
@@ -76,7 +76,7 @@ When calling `adjust_campaign_budget`:
 
 ## What NOT to Do
 
-- Do not act on yesterday's ROAS alone without checking the 3d and 7d windows too.
+- Do not act on yesterday's ROAS alone — it is only 20% of the signal.
 - Do not pause a campaign that has < $50 in yesterday spend — there is not enough signal.
 - Do not scale up if yesterday dipped below 110% of target (even if the weighted avg qualifies).
 - Do not apply budget changes to campaigns already changed today.

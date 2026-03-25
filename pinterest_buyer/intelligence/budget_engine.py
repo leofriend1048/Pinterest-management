@@ -88,10 +88,10 @@ def _resolve_spend(
 
 def _weighted_roas(roas_1d: float, roas_3d: float, roas_7d: float) -> float:
     """
-    Weighted composite: yesterday 50%, 3-day 30%, 7-day 20%.
+    Weighted composite: yesterday 20%, 3-day 30%, 7-day 50%.
     Windows with zero ROAS (no data) are excluded and weights renormalised.
     """
-    pairs = [(roas_1d, 0.50), (roas_3d, 0.30), (roas_7d, 0.20)]
+    pairs = [(roas_1d, 0.20), (roas_3d, 0.30), (roas_7d, 0.50)]
     valid = [(r, w) for r, w in pairs if r > 0]
     if not valid:
         return 0.0

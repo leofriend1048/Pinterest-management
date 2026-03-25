@@ -91,7 +91,7 @@ Brand targets:
 The system does not use a single ROAS number. It looks at three windows and weights them:
 
 ```
-Weighted ROAS = (yesterday ROAS × 0.50) + (3-day ROAS × 0.30) + (7-day ROAS × 0.20)
+Weighted ROAS = (yesterday ROAS × 0.20) + (3-day ROAS × 0.30) + (7-day ROAS × 0.50)
 ```
 
 Windows with no data (new campaigns) are excluded and the remaining weights renormalise. ROAS source is Northbeam (Pinterest-attributed) with platform ROAS as fallback.
