@@ -24,11 +24,11 @@ _client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 
 _SYSTEM_PROMPT = """You are a senior DTC performance buyer analyzing Pinterest ad account data
-for three brands: Michael Todd Beauty (SonicSmooth), NasalFresh MD, and Spa Sciences.
+for Michael Todd Beauty (SonicSmooth).
 
 You will receive a structured JSON snapshot of account performance across four timeframes
-(daily, weekly, monthly, quarterly) for 15 campaigns (5 per brand: discovery, actalike scale,
-performance+ scale, broad/interest scale, keyword scale).
+(daily, weekly, monthly, quarterly) for 4 campaign types: discovery, actalike scale,
+performance+ scale, and broad/interest scale.
 
 Identify ALL anomalies. For each anomaly, return structured JSON with these fields:
   - priority: "P0" | "P1" | "P2"

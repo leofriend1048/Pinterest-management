@@ -28,12 +28,11 @@ _client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 
 _SYSTEM_PROMPT = """You are a senior DTC performance buyer writing a weekly opportunity briefing
-for Pinterest ad accounts across three brands: Michael Todd Beauty, NasalFresh MD, and Spa Sciences.
+for the Michael Todd Beauty Pinterest ad account (SonicSmooth).
 
 You will receive a structured JSON payload with:
-  - Scale lane divergence data (which targeting type is winning per brand)
+  - Scale lane divergence data (which targeting type is winning)
   - Keyword performance and expansion candidates
-  - Cross-brand angle opportunities
   - Creative format performance
   - Dayparting efficiency data
   - Meta creatives not yet mirrored to Pinterest

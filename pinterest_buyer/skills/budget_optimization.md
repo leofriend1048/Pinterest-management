@@ -93,8 +93,6 @@ Floors are defined as a multiplier on the campaign's base budget:
 | Brand | High-floor months |
 |-------|------------------|
 | Michael Todd Beauty | Oct ×1.2, Nov ×1.4, Dec ×1.4 |
-| NasalFresh MD | Feb ×1.2, Mar ×1.3, Apr ×1.2 |
-| Spa Sciences | Dec ×1.3, Jan ×1.2 |
 
 ---
 
@@ -105,8 +103,6 @@ TARGET_ROAS is the profitability floor — not just a goal. All budget decisions
 | Brand | Target ROAS |
 |-------|-------------|
 | michael_todd_beauty | 2.8× |
-| nasalfresh_md | 3.2× |
-| spa_sciences | 2.5× |
 
 ---
 

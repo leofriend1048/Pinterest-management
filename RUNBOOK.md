@@ -23,19 +23,18 @@ Every night at 3 AM the system pulls performance data, makes budget and creative
 
 ---
 
-## The five campaigns per brand
+## The four campaign types
 
-Every brand runs exactly this structure. 15 campaigns total across the account.
+Michael Todd Beauty runs exactly this structure.
 
 ```
-[Brand] — Weekly Discovery          $300/day  starts here, new creatives weekly
-[Brand] — Scale: Actalike           $300/day  Actalike 0–2%
-[Brand] — Scale: Performance+       $300/day  Pinterest automated targeting
-[Brand] — Scale: Broad/Interest     $300/day  interest + keyword combined
-[Brand] — Scale: Keyword            $300/day  search keywords only
+MTB — Weekly Discovery          $300/day  starts here, new creatives weekly
+MTB — Scale: Actalike           $300/day  Actalike 0–2%
+MTB — Scale: Performance+       $300/day  Pinterest automated targeting
+MTB — Scale: Broad/Interest     $300/day  interest + keyword combined
 ```
 
-Scale campaigns start at $300/day and diverge over time. That divergence is signal — it tells you which targeting type Pinterest rewards for each brand.
+Scale campaigns start at $300/day and diverge over time. That divergence is signal — it tells you which targeting type Pinterest rewards.
 
 ---
 
@@ -65,12 +64,10 @@ Scale campaigns start at $300/day and diverge over time. That divergence is sign
 spend ≥ $300 AND ROAS ≥ 0.9 × brand target ROAS
 ```
 
-Brand targets:
+Brand target:
 | Brand | Target ROAS | Graduation floor |
 |---|---|---|
 | Michael Todd Beauty | 2.8x | 2.52x |
-| NasalFresh MD | 3.2x | 2.88x |
-| Spa Sciences | 2.5x | 2.25x |
 
 **What happens when a creative graduates:**
 - It gets added simultaneously as a new ad to all four scale campaigns for that brand
@@ -135,11 +132,6 @@ Budget cannot be cut below these multipliers × the current daily budget during 
 | Michael Todd Beauty | October | 1.2× |
 | Michael Todd Beauty | November | 1.4× |
 | Michael Todd Beauty | December | 1.4× |
-| NasalFresh MD | February | 1.2× |
-| NasalFresh MD | March | 1.3× |
-| NasalFresh MD | April | 1.2× |
-| Spa Sciences | December | 1.3× |
-| Spa Sciences | January | 1.2× |
 
 *These months often show short-term ROAS weakness because consideration windows get longer before conversion registers. The floor prevents the system from cutting during the highest-intent periods.*
 
@@ -188,7 +180,7 @@ Three Claude-powered agents run as part of the 3 AM job. They do not make decisi
 
 ### Anomaly detection agent (runs nightly)
 
-Receives a structured JSON snapshot of account performance at four timeframes (daily, weekly, monthly, quarterly) across all 15 campaigns. Returns anomalies classified as:
+Receives a structured JSON snapshot of account performance at four timeframes (daily, weekly, monthly, quarterly) across all 4 campaign types. Returns anomalies classified as:
 
 | Priority | Meaning | Response |
 |---|---|---|
@@ -202,7 +194,7 @@ The agent states for each anomaly: what changed, magnitude, most likely root cau
 
 Posted to `#pinterest-automated` at 7 AM. Structure:
 
-1. **Yesterday's scorecard** — spend, ROAS, NCPA per brand vs. 7-day average
+1. **Yesterday's scorecard** — spend, ROAS, NCPA vs. 7-day average
 2. **Creatives graduated overnight** — names, spend at graduation, ROAS, which 4 lanes entered
 3. **Budget decisions made** — what changed and why, with ROAS basis
 4. **Ads paused** — what got paused, 1d/3d/7d breakdown, rule that triggered
@@ -214,9 +206,8 @@ Posted to `#pinterest-automated` at 7 AM. Structure:
 Posted to `#pinterest-automated` at the end of the Monday 3 AM run. Covers:
 
 - Meta creatives with traction not yet on Pinterest
-- Scale lane divergence — which targeting type is winning per brand and by how much
+- Scale lane divergence — which targeting type is winning and by how much
 - Keyword expansion candidates based on search term performance
-- Cross-brand angle opportunities (if one brand outperforms its 30-day baseline by 1.5×+, checks whether a similar angle exists for the other two brands)
 - Format-level wins (video vs. static, aspect ratio) worth concentrating budget toward
 
 ---
@@ -323,8 +314,6 @@ SLACK_CHANNEL               Target channel (default: #pinterest-automated)
 PINTEREST_CONVERSION_TAG_ID Pinterest conversion tag ID — enables ROAS-optimised bidding on ad groups (optional)
 
 MTB_PINTEREST_AUDIENCE_ID   Michael Todd Beauty Actalike seed audience ID (default: 2542622686748)
-NF_PINTEREST_AUDIENCE_ID    NasalFresh MD Actalike seed audience ID (no default — Actalike lane skipped if blank)
-SS_PINTEREST_AUDIENCE_ID    Spa Sciences Actalike seed audience ID (no default — Actalike lane skipped if blank)
 
 SHADOW_MODE                 true = log only, no Pinterest writes (default: false)
 LOG_LEVEL                   INFO or DEBUG (default: INFO)

@@ -32,7 +32,7 @@ SLACK_DIGEST_TIME  = "07:00"
 SCHEDULE_TIMEZONE  = "America/New_York"
 
 # ── Brands & campaigns ───────────────────────────────────────────────────────
-BRANDS = ["michael_todd_beauty", "nasalfresh_md", "spa_sciences"]
+BRANDS = ["michael_todd_beauty"]
 
 CAMPAIGN_TYPES = [
     "discovery",
@@ -70,24 +70,12 @@ BRAND_CONFIG = {
         "geo":              ["US"],
         "conversion_event": "checkout",
     },
-    "nasalfresh_md": {
-        "code":             "NF",
-        "geo":              ["US"],
-        "conversion_event": "checkout",
-    },
-    "spa_sciences": {
-        "code":             "SS",
-        "geo":              ["US"],
-        "conversion_event": "checkout",
-    },
 }
 
 # Pinterest Saved Audience IDs for actalike seed (purchasers 180-day).
 # MTB audience ID sourced from: ads.pinterest.com/advertiser/549755981346/audience/edit?audienceId=2542622686748
 BRAND_AUDIENCE_IDS = {
     "michael_todd_beauty": os.getenv("MTB_PINTEREST_AUDIENCE_ID", "2542622686748"),
-    "nasalfresh_md":       os.getenv("NF_PINTEREST_AUDIENCE_ID", ""),
-    "spa_sciences":        os.getenv("SS_PINTEREST_AUDIENCE_ID", ""),
 }
 
 # ── Budgets ───────────────────────────────────────────────────────────────────
@@ -119,8 +107,6 @@ AD_CTA = "SHOP_NOW"
 # (Existing promoted pins keep their original title/description.)
 AD_TITLE = {
     "michael_todd_beauty": "Easy at-home dermaplaning",
-    "nasalfresh_md":       "Clear sinuses, better breathing",
-    "spa_sciences":        "Professional results at home",
 }
 
 AD_DESCRIPTION = {
@@ -134,8 +120,6 @@ AD_DESCRIPTION = {
         "\u2728 Will not make your hair grow back thicker or longer\n"
         "\u2728 Safer to use than a $2 drug store razor"
     ),
-    "nasalfresh_md": "",
-    "spa_sciences":  "",
 }
 
 # ── Attribution window ────────────────────────────────────────────────────────
@@ -208,8 +192,6 @@ DECISION_LOOKBACK_DAYS   = 14
 # ── Brand ROAS targets ────────────────────────────────────────────────────────
 TARGET_ROAS = {
     "michael_todd_beauty": 2.8,
-    "nasalfresh_md":       3.2,
-    "spa_sciences":        2.5,
 }
 
 # ── Brand landing pages (Northbeam + UTM tracked) ────────────────────────────
@@ -231,8 +213,6 @@ BRAND_LANDING_URLS = {
         "&utm_campaign={campaign_name}"
         "&utm_term={adgroup_name}"
     ),
-    "nasalfresh_md":       "https://www.nasalfreshmd.com",
-    "spa_sciences":        "https://www.spasciences.com",
 }
 
 # ── Keyword seeds ─────────────────────────────────────────────────────────────
@@ -255,14 +235,6 @@ KEYWORD_SEEDS = {
         "makeup tips", "natural makeup", "clean makeup", "esthetician tips",
         "beauty routine", "self care routine", "spa day at home",
     ],
-    "nasalfresh_md": [
-        "nasal rinse", "sinus rinse", "neti pot alternative",
-        "nasal irrigation", "sinus congestion relief", "xylitol nasal spray",
-    ],
-    "spa_sciences": [
-        "facial cleansing brush", "microcurrent device", "LED face mask",
-        "at-home spa treatment", "skincare device",
-    ],
 }
 
 # ── Interest seeds for broad targeting ───────────────────────────────────────
@@ -271,17 +243,12 @@ KEYWORD_SEEDS = {
 # Leave empty list to skip interest targeting (falls back to keyword-only).
 INTEREST_SEEDS = {
     "michael_todd_beauty": [],   # e.g. ["903"(Beauty), "906"(Skin care), ...]
-    "nasalfresh_md":       [],
-    "spa_sciences":        [],
 }
 
 # ── Brand campaign keywords (used by seeder to detect brand from campaign name) ─
 # Any campaign whose name (lowercased) contains one of these terms is assigned
 # to the matching brand.  Order matters — first match wins.
 BRAND_CAMPAIGN_KEYWORDS = {
-    "nasalfresh_md":       ["nasalfresh", "nasal fresh", "nasal", "sinus"],
-    "spa_sciences":        ["spa sciences", "spa_sciences", "spasciences"],
-    # MTB has many campaign styles — list creator names and product terms
     "michael_todd_beauty": [
         "sonicsmooth", "sonic smooth", "sonic", "beauty", "dermaplaning",
         "petite", "michael todd", "mtb", "kelly", "cheryl", "caroline",
@@ -294,8 +261,6 @@ BRAND_CAMPAIGN_KEYWORDS = {
 # ── Seasonal budget floors (month: multiplier) ────────────────────────────────
 SEASONAL_FLOORS = {
     "michael_todd_beauty": {10: 1.2, 11: 1.4, 12: 1.4},
-    "nasalfresh_md":       {2: 1.2, 3: 1.3, 4: 1.2},
-    "spa_sciences":        {12: 1.3, 1: 1.2},
 }
 
 # ── Anomaly thresholds ────────────────────────────────────────────────────────
