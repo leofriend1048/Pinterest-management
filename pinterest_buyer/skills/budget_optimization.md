@@ -11,12 +11,12 @@ Never act on a single day's ROAS. Always use the weighted composite across three
 
 | Window | Weight |
 |--------|--------|
-| Yesterday (1d) | 10% |
-| Last 3 days    | 40% |
-| Last 7 days    | 50% |
+| Yesterday (1d) | 50% |
+| Last 3 days    | 30% |
+| Last 7 days    | 20% |
 
 If a window has no data (zero ROAS), exclude it and renormalise the remaining weights.
-The heavy 7d weight makes the signal stable. Yesterday is a small leading indicator only.
+Yesterday carries the most weight — it is the strongest leading indicator. The 7d window provides stability against single-day volatility.
 
 ## Five-Tier Decision Framework
 
@@ -37,12 +37,11 @@ Do NOT scale up 25% if yesterday's ROAS is below 110% of target, even if the wei
 Rationale: prevents scaling on stale multi-day data when yesterday already dipped.
 
 ### Pause Guards (Tier 5)
-A campaign must satisfy ALL three conditions before pausing:
+A campaign must satisfy BOTH conditions before pausing:
 1. Weighted ROAS < 70% of target
 2. At least **2 of 3 windows** individually below 70% of target
-3. 7-day spend ≥ **$200** (enough data to act on)
 
-If the weighted ROAS is below 70% but the pause guards are not met, nudge down 15% instead.
+If the weighted ROAS is below 70% but fewer than 2 windows are confirmed bad, nudge down 15% instead.
 
 ### Minimum Gates (applies to ALL tiers)
 - Yesterday spend must be ≥ **$50** before any decision fires
@@ -77,8 +76,8 @@ When calling `adjust_campaign_budget`:
 
 ## What NOT to Do
 
-- Do not act on yesterday's ROAS alone — it is only 10% of the signal.
-- Do not pause a campaign that has < $200 in 7d spend, regardless of ROAS.
+- Do not act on yesterday's ROAS alone without checking the 3d and 7d windows too.
+- Do not pause a campaign that has < $50 in yesterday spend — there is not enough signal.
 - Do not scale up if yesterday dipped below 110% of target (even if the weighted avg qualifies).
 - Do not apply budget changes to campaigns already changed today.
 - Do not change a budget if yesterday spend was under $50 — there is not enough signal.

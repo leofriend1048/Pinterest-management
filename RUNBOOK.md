@@ -43,21 +43,15 @@ Scale campaigns start at $300/day and diverge over time. That divergence is sign
 
 **What the system does:**
 
-1. Calls Meta API, pulls all active/paused ads from the past 7 days with ≥ $150 spend
-2. Scores each creative:
-   ```
-   Score = (ROAS × 0.45) + (NCPA_inverse × 0.35) + (CTR × 0.10) + (Hook Rate × 0.10)
-   ```
-   - Hook rate = 3-second video plays ÷ total plays (0 for static images)
-   - NCPA_inverse is normalised — lower cost-per-acquisition scores higher relative to the candidate pool
-3. Removes any creative already in the Pinterest account
-4. Takes the top 5 by composite score
-5. Downloads each asset from Meta CDN to local storage (Meta CDN is not cross-platform shareable)
-6. Uploads to Pinterest, creates one new campaign at $300/day per brand with Actalike 1–3% targeting and interest expansion on
-7. Each creative becomes an individual ad within a single ad set
+1. Calls Meta API, pulls all active/paused ads from the past 7 days with ≥ $500 spend
+2. Removes any creative already in the Pinterest account
+3. Ranks remaining creatives by spend descending, takes the top 30
+4. Downloads each asset from Meta CDN to local storage (Meta CDN is not cross-platform shareable)
+5. Uploads to Pinterest, creates one new campaign at $300/day per brand with Actalike 1–3% targeting and interest expansion on
+6. Each creative becomes an individual ad within a single ad set
 
 **What it will NOT do:**
-- Launch a campaign if no creatives score above the spend threshold
+- Launch a campaign if no creatives meet the spend threshold
 - Re-upload a creative already in the account
 
 **Human checkpoint:** On the very first run (Phase 2 exit), a human approval gate is required before the first discovery campaign goes live.
@@ -165,7 +159,7 @@ AND 7-day spend > $150
 AND runtime > 3 days
 ```
 
-All three windows must be independently below the floor. If only 1d and 3d are bad but the 7-day average is still holding, the system logs a monitoring warning and waits — it does not pause yet.
+All three windows must be independently below the floor. If only 1d and 3d are bad but the 7-day average is still holding AND 7-day spend exceeds $300, the system logs a monitoring warning and waits — it does not pause yet. This is a yellow-alert state visible in logs only.
 
 ### Rule 4b — ROAS decay from first-week baseline
 
@@ -183,6 +177,8 @@ This catches creatives that started strong and are now clearly fatiguing. The de
 ## Rule 5 — Monthly Performance+ challenger (first Monday of each month, 3 AM)
 
 One additional challenger campaign per brand launches at $300/day using Pinterest's Performance+ targeting with the current top creatives. Runs for 30 days. The opportunity agent compares its efficiency to the standing Performance+ scale campaign on its next weekly run to track whether Pinterest's automated targeting is improving over time.
+
+The challenger is stored in `campaign_log` as `campaign_type = scale_pplus` with `is_challenger = 1`. This flag prevents the graduation engine from adding new creatives to it — graduated creatives only enter permanent scale campaigns, never challengers.
 
 ---
 
@@ -328,6 +324,11 @@ SLACK_BOT_TOKEN             Slack bot token (xoxb-...)
 SLACK_CHANNEL               Target channel (default: #pinterest-automated)
 
 PINTEREST_CONVERSION_TAG_ID Pinterest conversion tag ID — enables ROAS-optimised bidding on ad groups (optional)
+
+MTB_PINTEREST_AUDIENCE_ID   Michael Todd Beauty Actalike seed audience ID (default: 2542622686748)
+NF_PINTEREST_AUDIENCE_ID    NasalFresh MD Actalike seed audience ID (no default — Actalike lane skipped if blank)
+SS_PINTEREST_AUDIENCE_ID    Spa Sciences Actalike seed audience ID (no default — Actalike lane skipped if blank)
+
 SHADOW_MODE                 true = log only, no Pinterest writes (default: false)
 LOG_LEVEL                   INFO or DEBUG (default: INFO)
 DB_PATH                     Path to SQLite file (default: pinterest_buyer/state/pambs.db)

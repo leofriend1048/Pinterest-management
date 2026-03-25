@@ -23,16 +23,9 @@ Resume a paused scale campaign when:
 
 If the campaign was paused for structural underperformance (sustained low ROAS across all windows), use `propose_hypothesis` to design a proper restart test rather than blindly resuming.
 
-### Consideration Campaign
-The consideration campaign has a known learning-curve issue — it typically underperforms for 2–4 weeks after launch before finding its audience.
-
-- If paused for **< 2 weeks**: do NOT resume. The algorithm is still in the learning phase.
-- If paused for **2–3 weeks**: monitor; propose resume only if other signals are strong.
-- If paused for **≥ 3 weeks**: propose resume via `propose_hypothesis` (human approval required — consideration budget is not auto-resumed).
-
 **On resume: call `resume_campaign`** with:
 - `brand`: brand key
-- `campaign_type`: `scale_consideration` (or the appropriate campaign type)
+- `campaign_type`: the campaign type being resumed
 - `rationale`: state exact days paused, current brand ROAS context, and why conditions have changed
 - `predicted_outcome`: expected ROAS trajectory over the next 14 days
 
@@ -88,7 +81,6 @@ Qualify a keyword for addition when:
 | scale_pplus | Performance Plus automated targeting | $300/day launch |
 | scale_broad | Broad interest + keyword targeting | $300/day launch |
 | scale_actalike | Actalike audience (purchasers 180d seed) | $300/day launch |
-| scale_consideration | Mid-funnel MOF retargeting | $300/day launch |
 
 Discovery campaigns run weekly (launched Fridays). Scale campaigns are permanent.
 The weekly discovery campaign tests fresh creatives for 7 days before graduation eligibility.
@@ -96,7 +88,7 @@ The weekly discovery campaign tests fresh creatives for 7 days before graduation
 ## What NOT to Do
 
 - Do not pause a campaign to "reset" the algorithm as a default tactic — this costs learning time.
-- Do not resume consideration campaigns automatically — they require `propose_hypothesis` for human approval.
+- Do not resume campaigns paused for structural underperformance without a `propose_hypothesis` for human approval.
 - Do not propose hypotheses already present in the learnings table.
 - Do not add keywords with < 500 impressions — insufficient statistical signal.
 - Do not call `pause_campaign` when `pause_creative` would be sufficient.

@@ -53,7 +53,7 @@ TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {
                 "brand": {"type": "string", "description": "Brand key, e.g. michael_todd_beauty"},
-                "campaign_type": {"type": "string", "description": "discovery, scale_pplus, scale_broad, scale_consideration"},
+                "campaign_type": {"type": "string", "description": "discovery, scale_pplus, scale_broad, scale_actalike"},
                 "new_budget_usd": {"type": "number", "description": "New daily budget in USD"},
                 "rationale": {"type": "string", "description": "Why this change; reasoning chain"},
                 "predicted_outcome": {"type": "string", "description": "What you expect to happen (ROAS, spend, etc.)"},
