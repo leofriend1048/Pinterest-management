@@ -77,7 +77,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "pause_creative",
-        "description": "Pause an ad in a specific campaign. Use for underperformers (frequency, ROAS decay).",
+        "description": "Pause an ad in a specific campaign. Use for underperformers (low ROAS, ROAS decay).",
         "input_schema": {
             "type": "object",
             "properties": {

@@ -176,7 +176,6 @@ BUDGET_SCALE_UP_LIGHT_CAP  = 200.0
 BUDGET_NUDGE_DOWN_PCT      = 0.15
 
 # ── Ad-level pause rules ──────────────────────────────────────────────────────
-AD_PAUSE_FREQUENCY_THRESHOLD = 3.5
 AD_PAUSE_ROAS_FLOOR          = 0.70   # × target
 AD_PAUSE_MIN_SPEND_USD       = 150.0
 AD_PAUSE_MIN_RUNTIME_DAYS    = 3

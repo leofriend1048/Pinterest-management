@@ -48,11 +48,6 @@ Use this ranking to prioritise which creatives to graduate first if the action c
 
 Pause an individual ad (not the whole campaign) when ANY of the following are true:
 
-### Fatigue Signal: High Frequency
-- Frequency > **3.5** (user has seen the ad more than 3.5 times on average)
-- AND spend ≥ **$150**
-- AND runtime ≥ **3 days**
-
 ### Underperformance Signal: Low ROAS
 - ROAS < **70% of brand target** (ad-level, not campaign-level)
 - AND spend ≥ **$150**
@@ -65,14 +60,13 @@ Pause an individual ad (not the whole campaign) when ANY of the following are tr
 **On pause: call `pause_creative`** with:
 - `ad_id`: Pinterest ad ID
 - `campaign_id`: Pinterest campaign ID
-- `rationale`: state which signal triggered (frequency/low ROAS/decay) and the specific metric value
-- `predicted_outcome`: expected effect on campaign-level ROAS and frequency after removing this ad
+- `rationale`: state which signal triggered (low ROAS/decay) and the specific metric value
+- `predicted_outcome`: expected effect on campaign-level ROAS after removing this ad
 
 ## Ad Resume Rules
 
 Resume a paused ad when conditions have materially changed:
-- Frequency has reset (campaign frequency dropped below 2.5 in the past 7 days)
-- OR a minimum **3-week** pause window has passed AND the brand's overall campaign ROAS has recovered above target
+- A minimum **3-week** pause window has passed AND the brand's overall campaign ROAS has recovered above target
 
 Do NOT resume ads automatically within the first 3 weeks of being paused.
 

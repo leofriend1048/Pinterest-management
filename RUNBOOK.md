@@ -155,18 +155,9 @@ Budget cannot be cut below these multipliers × the current daily budget during 
 
 This runs independently of the budget engine. Budget decisions happen at the campaign level; underperformance handling happens at the ad level. A creative can be paused in one scale lane while staying active in others where it's working.
 
-The auditor pulls 1-day, 3-day, and 7-day analytics for every active ad, then checks three rules in order:
+The auditor pulls 1-day, 3-day, and 7-day analytics for every active ad, then checks two rules in order:
 
-### Rule 4a — Frequency cap with confirmed recent weakness
-
-```
-Frequency (7d) > 3.5
-AND ROAS is below 0.7× target in BOTH the 1-day AND 3-day window
-```
-
-High frequency alone does not pause the ad. If the ROAS is still strong, frequency is fine — the audience hasn't fatigued. Both recent windows must confirm the weakness.
-
-### Rule 4b — Persistent underperformance across all windows
+### Rule 4a — Persistent underperformance across all windows
 
 ```
 ROAS below 0.7× target in ALL THREE windows (1d, 3d, 7d)
@@ -176,7 +167,7 @@ AND runtime > 3 days
 
 All three windows must be independently below the floor. If only 1d and 3d are bad but the 7-day average is still holding, the system logs a monitoring warning and waits — it does not pause yet.
 
-### Rule 4c — ROAS decay from first-week baseline
+### Rule 4b — ROAS decay from first-week baseline
 
 ```
 7-day ROAS has dropped > 30% from the ad's first-week ROAS
@@ -244,7 +235,6 @@ Posted to `#pinterest-automated` at the end of the Monday 3 AM run. Covers:
 | Budget change (↑ or ↓) | Real-time | Budget engine |
 | Campaign paused | Real-time | Budget engine |
 | Ad paused | Real-time | Ad pause auditor |
-| Frequency rotation | Real-time | Fatigue detector |
 | Weekly opportunity update | Monday after 3 AM run | Opportunity agent |
 
 ---

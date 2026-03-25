@@ -2,21 +2,17 @@
 Ad-level pause auditor.
 
 Scans every active ad across the entire account and pauses those that hit
-any of the three underperformance conditions.
+any of the two underperformance conditions.
 
-All three rules now consider performance across three lookback windows:
+All rules consider performance across three lookback windows:
   yesterday (1d) / last 3 days / last 7 days
 
-  Rule 1 — Frequency cap:
-    frequency (7d) > 3.5 AND ROAS is below floor in both 1d AND 3d windows.
-    Frequency alone never pauses; ROAS must be confirmed weak recently.
-
-  Rule 2 — ROAS decay:
+  Rule 1 — ROAS decay:
     7-day ROAS dropped > 30% from the ad's first-week ROAS
     AND absolute ROAS is below floor in both 1d AND 3d windows.
     Prevents pausing on a transient 7-day blip if today is recovering.
 
-  Rule 3 — Persistent underperformance:
+  Rule 2 — Persistent underperformance:
     ROAS below floor in BOTH 1d AND 3d windows (not just one bad day)
     AND 7d ROAS also below floor
     AND spend > $150 AND runtime > 72 hours.
@@ -113,7 +109,6 @@ def _check_pause_rules(
     roas_3d = windows.get(3, {}).get("roas", 0.0)
     roas_7d = windows.get(7, {}).get("roas", 0.0)
     spend_7d    = windows.get(7, {}).get("spend", 0.0)
-    frequency_7d = windows.get(7, {}).get("frequency", 0.0)
 
     # Helper: is this window data present?
     has_1d = roas_1d > 0
@@ -125,20 +120,7 @@ def _check_pause_rules(
         f"(floor={floor_abs:.2f}x)"
     )
 
-    # ── Rule 1: Frequency + confirmed recent ROAS weakness ────────────────────
-    if frequency_7d > config.AD_PAUSE_FREQUENCY_THRESHOLD:
-        # Require ROAS to be bad in both 1d AND 3d to confirm it's not a blip
-        recent_bad = (
-            (has_1d and roas_1d < floor_abs)
-            and (has_3d and roas_3d < floor_abs)
-        )
-        if recent_bad:
-            return True, (
-                f"Frequency {frequency_7d:.1f} (7d) > {config.AD_PAUSE_FREQUENCY_THRESHOLD} "
-                f"AND ROAS confirmed weak in both recent windows. {window_str}"
-            )
-
-    # ── Rule 3: Persistent underperformance across all three windows ──────────
+    # ── Rule 1: Persistent underperformance across all three windows ──────────
     runtime = _get_ad_runtime_days(ad_id)
     if runtime > config.AD_PAUSE_MIN_RUNTIME_DAYS and spend_7d > config.AD_PAUSE_MIN_SPEND_USD:
         # All three windows must be present and below floor
@@ -164,7 +146,7 @@ def _check_pause_rules(
                 brand, ad_id, window_str,
             )
 
-    # ── Rule 2: ROAS decay (first-week baseline vs recent) ───────────────────
+    # ── Rule 2: ROAS decay (first-week baseline vs recent) ────────────────────
     first_week_roas = _get_first_week_roas(ad_id)
     if first_week_roas and first_week_roas > 0:
         # Use 7d as the "current" end, but require 1d AND 3d to also be weak

@@ -173,23 +173,6 @@ def alert_ad_paused(
     log.info("Slack: ad pause alert sent for %s in %s/%s", ad_name, brand, campaign_type)
 
 
-def alert_frequency_rotation(
-    creative_name: str,
-    brand: str,
-    frequency: float,
-    next_creative: str,
-) -> None:
-    blocks = [
-        _header("🔄 Creative Rotated (Frequency Cap)"),
-        _section(
-            f"*Brand:* {brand.replace('_', ' ').title()}\n"
-            f"*Creative rotated out:* {creative_name}\n"
-            f"*Frequency hit:* {frequency:.1f}\n"
-            f"*Next in queue:* {next_creative}"
-        ),
-    ]
-    _post(blocks, text=f"[PAMBS] Frequency rotation — {creative_name}")
-
 
 def post_morning_digest(digest_text: str) -> None:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
