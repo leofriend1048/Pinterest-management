@@ -382,6 +382,33 @@ def insert_performance_snapshot(snapshot: dict) -> None:
         """, snapshot)
 
 
+def upsert_daily_campaign_snapshot(snapshot: dict) -> None:
+    """
+    Write (or overwrite) a campaign-level daily performance row (ad_id=None).
+    Safe to call multiple times — replaces the existing row for that date/campaign.
+    Ad-level rows from the pause auditor are separate (they have ad_id set).
+    """
+    snapshot.setdefault("snapshot_date", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    snapshot["ad_id"] = None
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM performance_snapshots "
+            "WHERE snapshot_date=:snapshot_date AND campaign_id=:campaign_id AND ad_id IS NULL",
+            snapshot,
+        )
+        conn.execute("""
+            INSERT INTO performance_snapshots (
+                snapshot_date, campaign_id, ad_id, brand, campaign_type,
+                spend_usd, revenue_usd, roas, ncpa, impressions,
+                clicks, ctr, frequency, conversions
+            ) VALUES (
+                :snapshot_date, :campaign_id, :ad_id, :brand, :campaign_type,
+                :spend_usd, :revenue_usd, :roas, :ncpa, :impressions,
+                :clicks, :ctr, :frequency, :conversions
+            )
+        """, snapshot)
+
+
 def get_performance_window(brand: str, days: int, campaign_type: str | None = None) -> list[dict]:
     query = """
         SELECT * FROM performance_snapshots
@@ -410,6 +437,7 @@ def get_yesterday_summary() -> list[dict]:
             FROM performance_snapshots
             WHERE snapshot_date = date('now', '-1 day')
               AND campaign_id IS NOT NULL
+              AND ad_id IS NULL
             GROUP BY brand, campaign_type
         """).fetchall()
     return [dict(r) for r in rows]
@@ -425,6 +453,7 @@ def get_baseline_summary(days: int = 7) -> list[dict]:
             FROM performance_snapshots
             WHERE snapshot_date BETWEEN date('now', '-{days} days') AND date('now', '-1 day')
               AND campaign_id IS NOT NULL
+              AND ad_id IS NULL
             GROUP BY brand, campaign_type
         """).fetchall()
     return [dict(r) for r in rows]

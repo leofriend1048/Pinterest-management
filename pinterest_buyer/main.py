@@ -208,6 +208,59 @@ def seed_existing_campaigns() -> None:
              seeded, skipped)
 
 
+# ── Daily campaign performance snapshot ──────────────────────────────────────
+
+def _snapshot_daily_campaign_performance() -> None:
+    """
+    Fetch yesterday's campaign-level analytics from Pinterest and persist one row
+    per active campaign to performance_snapshots (ad_id=None).
+
+    This ensures the anomaly agent's 4-timeframe arrays are populated every day,
+    not just on days when the pause auditor happens to pause ads.
+    """
+    from datetime import date as _date, timedelta as _td
+    yesterday = (_date.today() - _td(days=1)).isoformat()
+
+    all_campaigns = db.get_active_campaigns()
+    if not all_campaigns:
+        return
+
+    pin_ids = [c.get("pinterest_campaign_id") or c["campaign_id"] for c in all_campaigns]
+    id_to_camp = {
+        (c.get("pinterest_campaign_id") or c["campaign_id"]): c
+        for c in all_campaigns
+    }
+
+    try:
+        rows = pinterest.get_campaign_analytics(pin_ids, yesterday, yesterday)
+    except Exception as exc:
+        log.warning("Daily campaign snapshot fetch failed: %s", exc)
+        return
+
+    saved = 0
+    for row in rows:
+        camp = id_to_camp.get(row["campaign_id"])
+        if not camp:
+            continue
+        db.upsert_daily_campaign_snapshot({
+            "snapshot_date": yesterday,
+            "campaign_id":   camp["campaign_id"],
+            "brand":         camp["brand"],
+            "campaign_type": camp["campaign_type"],
+            "spend_usd":     row.get("spend", 0.0),
+            "revenue_usd":   row.get("revenue", 0.0),
+            "roas":          row.get("roas", 0.0),
+            "ncpa":          row.get("ncpa", 0.0),
+            "impressions":   row.get("impressions", 0),
+            "clicks":        row.get("clicks", 0),
+            "ctr":           row.get("ctr", 0.0),
+            "frequency":     0.0,
+            "conversions":   row.get("conversions", 0),
+        })
+        saved += 1
+    log.info("Daily campaign snapshot complete: %d campaigns persisted for %s.", saved, yesterday)
+
+
 # ── Daypart + keyword ingestion ───────────────────────────────────────────────
 
 def _ingest_daypart_and_keywords() -> None:
@@ -305,11 +358,12 @@ def daily_run() -> None:
     4. Scale graduation check
     5. Budget optimization
     6. Ad-level pause audit
-    7. Daypart + keyword ingestion
-    8. Anomaly detection agent
-    9. Orchestrator agent (strategic decisions on top of rule-based engines)
-    10. Calibration review (Mondays only)
-    11. Opportunity agent (Mondays only)
+    7. Daily campaign performance snapshot
+    8. Daypart + keyword ingestion
+    9. Anomaly detection agent
+    10. Orchestrator agent (strategic decisions on top of rule-based engines)
+    11. Calibration review (Mondays only)
+    12. Opportunity agent (Mondays only)
     """
     global _digest_payload
 
@@ -370,14 +424,21 @@ def daily_run() -> None:
     except Exception as exc:
         log.error("Ad pause audit failed: %s", exc)
 
-    # Step 7: Daypart + keyword ingestion (feeds fatigue detector & opportunity agent)
+    # Step 7: Persist campaign-level performance snapshot (feeds anomaly agent)
+    log.info("Snapshotting daily campaign performance...")
+    try:
+        _snapshot_daily_campaign_performance()
+    except Exception as exc:
+        log.error("Daily campaign snapshot failed: %s", exc)
+
+    # Step 8: Daypart + keyword ingestion (feeds fatigue detector & opportunity agent)
     log.info("Ingesting daypart and keyword data...")
     try:
         _ingest_daypart_and_keywords()
     except Exception as exc:
         log.error("Daypart/keyword ingestion failed: %s", exc)
 
-    # Step 8: AI agent — anomaly detection
+    # Step 9: AI agent — anomaly detection
     log.info("Running anomaly detection agent...")
     anomaly_result: dict = {"anomalies": [], "summary": ""}
     try:
@@ -385,7 +446,7 @@ def daily_run() -> None:
     except Exception as exc:
         log.error("Anomaly detection failed: %s", exc)
 
-    # Step 9: Orchestrator agent — strategic decisions on top of rule-based engines
+    # Step 10: Orchestrator agent — strategic decisions on top of rule-based engines
     log.info("Running orchestrator agent...")
     orchestrator_actions: list[dict] = []
     try:
@@ -397,7 +458,7 @@ def daily_run() -> None:
     except Exception as exc:
         log.error("Orchestrator agent failed: %s", exc)
 
-    # Step 10 (Mondays): Calibration review — compare orchestrator predictions to actuals
+    # Step 11 (Mondays): Calibration review — compare orchestrator predictions to actuals
     calibration_summary: str | None = None
     if _is_monday():
         log.info("Monday — running calibration review...")
@@ -408,7 +469,7 @@ def daily_run() -> None:
         except Exception as exc:
             log.error("Calibration review failed: %s", exc)
 
-    # Step 11 (Mondays): Opportunity agent
+    # Step 12 (Mondays): Opportunity agent
     opportunity_report: str | None = None
     if _is_monday():
         log.info("Monday — running opportunity agent...")
@@ -434,6 +495,22 @@ def daily_run() -> None:
 
 def post_morning_digest() -> None:
     """7 AM job — write and post the morning digest."""
+    # Dedup guard: prevent double posts if the scheduler fires twice (restart, --once overlap, etc.)
+    with db.get_db() as _conn:
+        _already = _conn.execute(
+            "SELECT 1 FROM agent_action_log "
+            "WHERE tool_name='morning_digest' AND DATE(timestamp)=date('now') LIMIT 1"
+        ).fetchone()
+    if _already:
+        log.warning("Morning digest already posted today — skipping duplicate send.")
+        return
+
+    # Mark as sent before posting so a Slack exception can't trigger a second attempt
+    with db.get_db() as _conn:
+        _conn.execute(
+            "INSERT INTO agent_action_log (tool_name, executed) VALUES ('morning_digest', 1)"
+        )
+
     log.info("Generating morning digest...")
     try:
         digest_text = narrative_agent.write_morning_digest(
