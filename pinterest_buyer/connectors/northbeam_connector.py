@@ -187,23 +187,8 @@ def _download_csv(url: str) -> list[dict]:
 
 # ── Core export runner ────────────────────────────────────────────────────────
 
-def _run_export(level: str, platform: str, days: int) -> list[dict]:
-    """
-    Submit a DAILY-granularity export job for the last `days` days, aggregated
-    to one row per entity over the period (aggregate_data=True).
-
-    level    — "campaign" | "ad"
-    platform — "Pinterest" | "Facebook Ads"  (exact Northbeam breakdown label)
-    days     — lookback window (1 = yesterday only, 3 = last 3 days, 7 = last 7 days)
-
-    Metrics requested: spend + rev (confirmed IDs). roas and transactions are
-    attempted; if absent in CSV, ROAS is computed from rev/spend and conversions
-    default to 0.
-    """
-    end   = date.today() - timedelta(days=1)      # yesterday
-    start = end - timedelta(days=days - 1)
-
-    body: dict[str, Any] = {
+def _build_export_body(level: str, platform: str, aggregate: bool) -> dict[str, Any]:
+    return {
         "level":            level,
         "time_granularity": "DAILY",
         "breakdowns": [
@@ -212,7 +197,7 @@ def _run_export(level: str, platform: str, days: int) -> list[dict]:
         ],
         "options": {
             "remove_zero_spend":         False,
-            "aggregate_data":            True,   # collapse to one row per entity
+            "aggregate_data":            aggregate,
             "include_ids":               True,
             "include_kind_and_platform": False,
         },
@@ -224,12 +209,37 @@ def _run_export(level: str, platform: str, days: int) -> list[dict]:
         "metrics": [
             {"id": "spend"},
             {"id": "rev"},
-            {"id": "roas"},          # may not be available on all accounts — fallback below
-            {"id": "new_visitors"},  # % new visits signal — may not be on all accounts
+            {"id": "roas"},
+            {"id": "new_visitors"},
         ],
     }
 
-    job_id  = _submit_job(body, start.isoformat(), end.isoformat())
+
+def _run_export(level: str, platform: str, days: int) -> list[dict]:
+    """
+    Submit a DAILY-granularity export job for the last `days` days, aggregated
+    to one row per entity over the period (aggregate_data=True).
+
+    level    — "campaign" | "ad"
+    platform — "Pinterest" | "Facebook Ads"  (exact Northbeam breakdown label)
+    days     — lookback window (1 = yesterday only, 3 = last 3 days, 7 = last 7 days)
+    """
+    end   = date.today() - timedelta(days=1)      # yesterday
+    start = end - timedelta(days=days - 1)
+    job_id  = _submit_job(_build_export_body(level, platform, aggregate=True),
+                          start.isoformat(), end.isoformat())
+    csv_url = _poll_job(job_id)
+    return _download_csv(csv_url)
+
+
+def _run_export_range(level: str, platform: str, start: date, end: date) -> list[dict]:
+    """
+    Submit a per-day export job for an explicit date range (aggregate_data=False).
+    Returns raw CSV rows — each row represents one entity on one specific day.
+    Used for historical backfill.
+    """
+    job_id  = _submit_job(_build_export_body(level, platform, aggregate=False),
+                          start.isoformat(), end.isoformat())
     csv_url = _poll_job(job_id)
     return _download_csv(csv_url)
 
@@ -316,6 +326,80 @@ def _parse_rows(rows: list[dict], id_candidates: list[str]) -> dict[str, dict]:
     return result
 
 
+# ── Per-day CSV parser (for backfill) ─────────────────────────────────────────
+
+def _parse_rows_by_date(
+    rows: list[dict],
+    id_candidates: list[str],
+) -> dict[str, dict[str, dict]]:
+    """
+    Parse a non-aggregated Northbeam CSV into {date_str: {entity_id: metrics}}.
+    The date column is typically 'Date', 'date', or 'Day'.
+    """
+    if not rows:
+        return {}
+
+    id_col = _find_col(rows[0], id_candidates)
+    if not id_col:
+        log.error("Northbeam backfill: ID column not found")
+        return {}
+
+    _DATE_COLS = ["Date", "date", "Day", "day", "Stat Date", "stat_date"]
+    date_col = _find_col(rows[0], _DATE_COLS) if rows else ""
+    if not date_col:
+        log.error("Northbeam backfill: date column not found. Columns: %s",
+                  list(rows[0].keys()) if rows else [])
+        return {}
+
+    _NAME_CANDIDATES = [
+        "campaign_name", "Campaign Name", "Campaign",
+        "ad_name", "Ad Name", "Ad",
+        "name", "Name",
+    ]
+
+    result: dict[str, dict[str, dict]] = {}
+    for row in rows:
+        entity_id = row.get(id_col, "").strip()
+        raw_date  = row.get(date_col, "").strip()
+        if not entity_id or not raw_date:
+            continue
+
+        # Normalise to YYYY-MM-DD
+        date_str = raw_date[:10]
+        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%Y/%m/%d"):
+            try:
+                from datetime import datetime as _dt
+                date_str = _dt.strptime(raw_date[:10], fmt).strftime("%Y-%m-%d")
+                break
+            except ValueError:
+                continue
+
+        spend   = _parse_float(row.get("spend") or row.get("Spend"))
+        revenue = _parse_float(row.get("rev") or row.get("Revenue")
+                               or row.get("attributed_revenue"))
+        roas    = _parse_float(row.get("roas") or row.get("ROAS"))
+        if roas == 0.0 and spend > 0 and revenue > 0:
+            roas = revenue / spend
+        conversions  = int(_parse_float(row.get("transactions") or row.get("Transactions") or 0))
+        new_visitors = _parse_float(
+            row.get("new_visitors") or row.get("New Visitors")
+            or row.get("new_visitor_sessions") or 0
+        )
+        entity_name = next(
+            (row[k].strip() for k in _NAME_CANDIDATES if row.get(k, "").strip()),
+            None,
+        )
+        result.setdefault(date_str, {})[entity_id] = {
+            "name":         entity_name,
+            "spend":        spend,
+            "revenue":      revenue,
+            "roas":         roas,
+            "conversions":  conversions,
+            "new_visitors": new_visitors,
+        }
+    return result
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def fetch_multiwindow_campaign_roas(
@@ -388,6 +472,43 @@ def fetch_meta_campaign_roas(lookback_days: int = 7) -> dict[str, dict]:
     except Exception as exc:
         log.error("Northbeam Meta campaign export failed: %s", exc)
         return {}
+
+
+# ── Historical backfill helpers ───────────────────────────────────────────────
+
+def backfill_campaign_stats(
+    start: date, end: date
+) -> dict[str, dict[str, dict]]:
+    """
+    Fetch Pinterest campaign stats day-by-day for a date range.
+    Returns {date_str: {campaign_id: {name, spend, revenue, roas, conversions, new_visitors}}}.
+    One Northbeam export job for the whole range (efficient).
+    """
+    rows = _run_export_range("campaign", "Pinterest", start, end)
+    result = _parse_rows_by_date(
+        rows,
+        id_candidates=["campaign_id", "Campaign ID", "id", "ID"],
+    )
+    log.info("Northbeam: campaign backfill parsed %d date-rows across %d days",
+             sum(len(v) for v in result.values()), len(result))
+    return result
+
+
+def backfill_ad_stats(
+    start: date, end: date
+) -> dict[str, dict[str, dict]]:
+    """
+    Fetch Pinterest ad stats day-by-day for a date range.
+    Returns {date_str: {ad_id: {name, spend, revenue, roas, conversions, new_visitors}}}.
+    """
+    rows = _run_export_range("ad", "Pinterest", start, end)
+    result = _parse_rows_by_date(
+        rows,
+        id_candidates=["ad_id", "Ad ID", "id", "ID"],
+    )
+    log.info("Northbeam: ad backfill parsed %d date-rows across %d days",
+             sum(len(v) for v in result.values()), len(result))
+    return result
 
 
 # ── Connectivity test ─────────────────────────────────────────────────────────

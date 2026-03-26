@@ -346,6 +346,107 @@ def get_campaign_analytics(
     return results
 
 
+def get_campaign_analytics_by_day(
+    campaign_ids: list[str],
+    start_date: str,
+    end_date: str,
+) -> list[dict]:
+    """
+    Fetch campaign-level analytics with DAY granularity.
+    Returns one row per campaign per day — used for historical backfill.
+    Each row includes a 'date' field (YYYY-MM-DD).
+    """
+    ids_param = ",".join(campaign_ids)
+    resp = _req(
+        "GET",
+        f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/campaigns/analytics",
+        params={
+            "campaign_ids":        ids_param,
+            "start_date":          start_date,
+            "end_date":            end_date,
+            "columns":             (
+                "CAMPAIGN_ID,DATE,SPEND_IN_DOLLAR,TOTAL_CONVERSIONS,"
+                "TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR,"
+                "PAID_IMPRESSION,CLICKTHROUGH_1"
+            ),
+            "granularity":         "DAY",
+            "click_window_days":   config.CLICK_WINDOW_DAYS,
+            "view_window_days":    config.VIEW_WINDOW_DAYS,
+        },
+    )
+    results = []
+    for row in resp if isinstance(resp, list) else []:
+        spend       = float(row.get("SPEND_IN_DOLLAR", 0) or 0)
+        revenue     = float(row.get("TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR", 0) or 0) / 1_000_000
+        imps        = int(row.get("PAID_IMPRESSION", 0) or 0)
+        clicks      = int(row.get("CLICKTHROUGH_1", 0) or 0)
+        conversions = int(row.get("TOTAL_CONVERSIONS", 0) or 0)
+        date_str    = (row.get("DATE") or "")[:10]
+        results.append({
+            "campaign_id": row.get("CAMPAIGN_ID"),
+            "date":        date_str,
+            "spend":       spend,
+            "revenue":     revenue,
+            "roas":        revenue / spend if spend else 0.0,
+            "impressions": imps,
+            "clicks":      clicks,
+            "ctr":         clicks / imps if imps else 0.0,
+            "conversions": conversions,
+            "ncpa":        spend / conversions if conversions else 0.0,
+        })
+    return results
+
+
+def get_ad_group_analytics_by_day(
+    ad_group_ids: list[str],
+    start_date: str,
+    end_date: str,
+) -> list[dict]:
+    """
+    Fetch ad group analytics with DAY granularity for historical backfill.
+    Each row includes a 'date' field (YYYY-MM-DD).
+    """
+    ids_param = ",".join(ad_group_ids)
+    resp = _req(
+        "GET",
+        f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/ad_groups/analytics",
+        params={
+            "ad_group_ids":      ids_param,
+            "start_date":        start_date,
+            "end_date":          end_date,
+            "columns":           (
+                "AD_GROUP_ID,DATE,SPEND_IN_DOLLAR,TOTAL_CONVERSIONS,"
+                "TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR,"
+                "PAID_IMPRESSION,CLICKTHROUGH_1"
+            ),
+            "granularity":       "DAY",
+            "click_window_days": config.CLICK_WINDOW_DAYS,
+            "view_window_days":  config.VIEW_WINDOW_DAYS,
+        },
+    )
+    results = []
+    for row in resp if isinstance(resp, list) else []:
+        spend       = float(row.get("SPEND_IN_DOLLAR", 0) or 0)
+        revenue     = float(row.get("TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR", 0) or 0) / 1_000_000
+        imps        = int(row.get("PAID_IMPRESSION", 0) or 0)
+        clicks      = int(row.get("CLICKTHROUGH_1", 0) or 0)
+        conversions = int(row.get("TOTAL_CONVERSIONS", 0) or 0)
+        date_str    = (row.get("DATE") or "")[:10]
+        results.append({
+            "ad_group_id": row.get("AD_GROUP_ID"),
+            "date":        date_str,
+            "spend":       spend,
+            "revenue":     revenue,
+            "roas":        revenue / spend if spend else 0.0,
+            "impressions": imps,
+            "clicks":      clicks,
+            "ctr":         clicks / imps if imps else 0.0,
+            "conversions": conversions,
+            "ncpa":        spend / conversions if conversions else 0.0,
+        })
+    return results
+
+
 def get_ad_analytics(
     ad_ids: list[str],
     start_date: str,

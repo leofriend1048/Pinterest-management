@@ -208,6 +208,172 @@ def seed_existing_campaigns() -> None:
              seeded, skipped)
 
 
+# ── 30-day historical backfill ────────────────────────────────────────────────
+
+def backfill_history(days: int = 30) -> None:
+    """
+    Backfill the last N days of Northbeam and Pinterest data into the DB.
+    Safe to call repeatedly — all writes are idempotent upserts.
+
+    Steps
+    -----
+    1. Northbeam campaign stats  — one export job for the full range
+    2. Northbeam ad stats        — one export job for the full range
+    3. Pinterest campaign perf   — DAY-granularity, single API call
+    4. Pinterest ad group stats  — DAY-granularity, batched by 100 ad groups
+
+    Run with:  python -m pinterest_buyer.main --backfill [--backfill-days N]
+    """
+    from connectors import northbeam_connector as nb
+    from datetime import date as _date, timedelta as _td
+
+    end   = _date.today() - _td(days=1)          # yesterday
+    start = end - _td(days=days - 1)
+    log.info("═══ Backfilling %d days (%s → %s) ═══", days, start, end)
+
+    # ── 1. Northbeam campaign stats ───────────────────────────────────────────
+    log.info("Step 1/4: Northbeam campaign stats...")
+    try:
+        daily_camp = nb.backfill_campaign_stats(start, end)
+        saved = 0
+        for date_str, entities in daily_camp.items():
+            for entity_id, m in entities.items():
+                db.upsert_northbeam_stat({
+                    "stat_date":    date_str,
+                    "level":        "campaign",
+                    "entity_id":    entity_id,
+                    "entity_name":  m.get("name"),
+                    "spend":        m.get("spend", 0.0),
+                    "revenue":      m.get("revenue", 0.0),
+                    "roas":         m.get("roas", 0.0),
+                    "conversions":  m.get("conversions", 0),
+                    "new_visitors": m.get("new_visitors", 0.0),
+                })
+                saved += 1
+        log.info("  → %d Northbeam campaign rows across %d days.", saved, len(daily_camp))
+    except Exception as exc:
+        log.error("Northbeam campaign backfill failed: %s", exc)
+
+    # ── 2. Northbeam ad stats ─────────────────────────────────────────────────
+    log.info("Step 2/4: Northbeam ad stats...")
+    try:
+        daily_ads = nb.backfill_ad_stats(start, end)
+        saved = 0
+        for date_str, entities in daily_ads.items():
+            for entity_id, m in entities.items():
+                db.upsert_northbeam_stat({
+                    "stat_date":    date_str,
+                    "level":        "ad",
+                    "entity_id":    entity_id,
+                    "entity_name":  m.get("name"),
+                    "spend":        m.get("spend", 0.0),
+                    "revenue":      m.get("revenue", 0.0),
+                    "roas":         m.get("roas", 0.0),
+                    "conversions":  m.get("conversions", 0),
+                    "new_visitors": m.get("new_visitors", 0.0),
+                })
+                saved += 1
+        log.info("  → %d Northbeam ad rows across %d days.", saved, len(daily_ads))
+    except Exception as exc:
+        log.error("Northbeam ad backfill failed: %s", exc)
+
+    # ── 3. Pinterest campaign performance ─────────────────────────────────────
+    log.info("Step 3/4: Pinterest campaign performance (DAY granularity)...")
+    all_campaigns = db.get_active_campaigns()
+    if all_campaigns:
+        pin_ids    = [c.get("pinterest_campaign_id") or c["campaign_id"] for c in all_campaigns]
+        id_to_camp = {
+            (c.get("pinterest_campaign_id") or c["campaign_id"]): c
+            for c in all_campaigns
+        }
+        try:
+            pin_rows = pinterest.get_campaign_analytics_by_day(
+                pin_ids, start.isoformat(), end.isoformat()
+            )
+            for row in pin_rows:
+                camp = id_to_camp.get(row["campaign_id"])
+                if not camp or not row.get("date"):
+                    continue
+                db.upsert_daily_campaign_snapshot({
+                    "snapshot_date": row["date"],
+                    "campaign_id":   camp["campaign_id"],
+                    "brand":         camp["brand"],
+                    "campaign_type": camp["campaign_type"],
+                    "spend_usd":     row.get("spend", 0.0),
+                    "revenue_usd":   row.get("revenue", 0.0),
+                    "roas":          row.get("roas", 0.0),
+                    "ncpa":          row.get("ncpa", 0.0),
+                    "impressions":   row.get("impressions", 0),
+                    "clicks":        row.get("clicks", 0),
+                    "ctr":           row.get("ctr", 0.0),
+                    "frequency":     0.0,
+                    "conversions":   row.get("conversions", 0),
+                })
+            log.info("  → %d Pinterest campaign rows.", len(pin_rows))
+        except Exception as exc:
+            log.error("Pinterest campaign backfill failed: %s", exc)
+    else:
+        log.warning("  No active campaigns in DB — run --seed first.")
+
+    # ── 4. Pinterest ad group stats ───────────────────────────────────────────
+    log.info("Step 4/4: Pinterest ad group stats (DAY granularity)...")
+    try:
+        ad_groups = pinterest.list_all_ad_groups()
+        if ad_groups:
+            ag_ids    = [ag["id"] for ag in ad_groups if ag.get("id")]
+            ag_names  = {ag["id"]: ag.get("name", "") for ag in ad_groups}
+            ag_camp   = {ag["id"]: ag.get("campaign_id", "") for ag in ad_groups}
+            camp_meta = {
+                c.get("pinterest_campaign_id") or c["campaign_id"]: c
+                for c in (all_campaigns or [])
+            }
+
+            batch_size = 100
+            ag_rows: list[dict] = []
+            for i in range(0, len(ag_ids), batch_size):
+                batch = ag_ids[i:i + batch_size]
+                try:
+                    ag_rows.extend(
+                        pinterest.get_ad_group_analytics_by_day(
+                            batch, start.isoformat(), end.isoformat()
+                        )
+                    )
+                except Exception as exc:
+                    log.warning("Ad group backfill batch [%d:%d] failed: %s", i, i + batch_size, exc)
+
+            for row in ag_rows:
+                ag_id   = row.get("ad_group_id")
+                camp_id = ag_camp.get(ag_id, "")
+                camp    = camp_meta.get(camp_id, {})
+                if not row.get("date"):
+                    continue
+                spend   = row.get("spend", 0.0)
+                revenue = row.get("revenue", 0.0)
+                db.upsert_ad_group_stat({
+                    "stat_date":     row["date"],
+                    "ad_group_id":   ag_id,
+                    "ad_group_name": ag_names.get(ag_id, ""),
+                    "campaign_id":   camp_id,
+                    "brand":         camp.get("brand"),
+                    "campaign_type": camp.get("campaign_type"),
+                    "spend_usd":     spend,
+                    "revenue_usd":   revenue,
+                    "roas":          revenue / spend if spend else 0.0,
+                    "impressions":   row.get("impressions", 0),
+                    "clicks":        row.get("clicks", 0),
+                    "ctr":           row.get("ctr", 0.0),
+                    "conversions":   row.get("conversions", 0),
+                    "ncpa":          row.get("ncpa", 0.0),
+                })
+            log.info("  → %d Pinterest ad group rows.", len(ag_rows))
+        else:
+            log.info("  No active ad groups found.")
+    except Exception as exc:
+        log.error("Pinterest ad group backfill failed: %s", exc)
+
+    log.info("═══ Backfill complete ═══")
+
+
 # ── Daily campaign performance snapshot ──────────────────────────────────────
 
 def _snapshot_daily_campaign_performance() -> None:
@@ -850,12 +1016,29 @@ def main() -> None:
     parser.add_argument(
         "--once",
         action="store_true",
-        help="Run daily_run() immediately once, then exit (useful for testing).",
+        help="Run daily_run() + post_morning_digest() immediately, then exit.",
+    )
+    parser.add_argument(
+        "--run-now",
+        action="store_true",
+        help="Alias for --once: simulate the 3 AM + 7 AM run immediately.",
     )
     parser.add_argument(
         "--digest-only",
         action="store_true",
         help="Only post the morning digest (requires a prior --once run).",
+    )
+    parser.add_argument(
+        "--backfill",
+        action="store_true",
+        help="Backfill historical Northbeam + Pinterest data into the DB.",
+    )
+    parser.add_argument(
+        "--backfill-days",
+        type=int,
+        default=30,
+        metavar="N",
+        help="Number of days to backfill (default: 30). Used with --backfill.",
     )
     parser.add_argument(
         "--seed",
@@ -899,7 +1082,7 @@ def main() -> None:
         seed_existing_campaigns()
         return
 
-    if args.once:
+    if args.once or args.run_now:
         seed_existing_campaigns()   # safe to call every time — upserts only
         daily_run()
         post_morning_digest()
@@ -907,6 +1090,11 @@ def main() -> None:
 
     if args.digest_only:
         post_morning_digest()
+        return
+
+    if args.backfill:
+        seed_existing_campaigns()   # need campaigns in DB for the Pinterest steps
+        backfill_history(days=args.backfill_days)
         return
 
     # Production scheduler
