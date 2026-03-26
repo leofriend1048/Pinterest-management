@@ -230,6 +230,45 @@ def init_db() -> None:
             proposed_by     TEXT DEFAULT 'agent',
             created_at      TEXT DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS northbeam_daily_stats (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            stat_date    TEXT NOT NULL,
+            level        TEXT NOT NULL,   -- 'campaign' | 'ad'
+            entity_id    TEXT NOT NULL,
+            entity_name  TEXT,
+            spend        REAL DEFAULT 0,
+            revenue      REAL DEFAULT 0,
+            roas         REAL DEFAULT 0,
+            conversions  INTEGER DEFAULT 0,
+            new_visitors REAL DEFAULT 0,
+            created_at   TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_nb_daily_unique
+            ON northbeam_daily_stats(stat_date, level, entity_id);
+
+        CREATE TABLE IF NOT EXISTS pinterest_ad_group_stats (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            stat_date     TEXT NOT NULL,
+            ad_group_id   TEXT NOT NULL,
+            ad_group_name TEXT,
+            campaign_id   TEXT NOT NULL,
+            brand         TEXT,
+            campaign_type TEXT,
+            spend_usd     REAL DEFAULT 0,
+            revenue_usd   REAL DEFAULT 0,
+            roas          REAL DEFAULT 0,
+            impressions   INTEGER DEFAULT 0,
+            clicks        INTEGER DEFAULT 0,
+            ctr           REAL DEFAULT 0,
+            conversions   INTEGER DEFAULT 0,
+            ncpa          REAL DEFAULT 0,
+            created_at    TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_pag_daily_unique
+            ON pinterest_ad_group_stats(stat_date, ad_group_id);
         """)
     log.info("Database initialised at %s", config.DB_PATH)
 
@@ -636,3 +675,141 @@ def resume_campaign(campaign_id: str) -> None:
             "UPDATE campaign_log SET status='active' WHERE campaign_id=?",
             (campaign_id,),
         )
+
+
+# ── northbeam_daily_stats helpers ─────────────────────────────────────────────
+
+def upsert_northbeam_stat(record: dict) -> None:
+    """Insert or overwrite a single day's Northbeam row for one entity."""
+    record.setdefault("entity_name", None)
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO northbeam_daily_stats
+                (stat_date, level, entity_id, entity_name, spend, revenue, roas, conversions, new_visitors)
+            VALUES
+                (:stat_date, :level, :entity_id, :entity_name, :spend, :revenue, :roas, :conversions, :new_visitors)
+            ON CONFLICT(stat_date, level, entity_id) DO UPDATE SET
+                entity_name  = excluded.entity_name,
+                spend        = excluded.spend,
+                revenue      = excluded.revenue,
+                roas         = excluded.roas,
+                conversions  = excluded.conversions,
+                new_visitors = excluded.new_visitors
+        """, record)
+
+
+def get_northbeam_account_window(days: int) -> dict:
+    """
+    Account-level Northbeam totals for the last N days (all campaigns summed).
+    Returns {spend, revenue, roas, conversions, new_visitors, days_of_data}.
+    """
+    with get_db() as conn:
+        row = conn.execute("""
+            SELECT
+                SUM(spend)        as spend,
+                SUM(revenue)      as revenue,
+                CASE WHEN SUM(spend) > 0 THEN SUM(revenue)/SUM(spend) ELSE 0 END as roas,
+                SUM(conversions)  as conversions,
+                SUM(new_visitors) as new_visitors,
+                COUNT(DISTINCT stat_date) as days_of_data
+            FROM northbeam_daily_stats
+            WHERE level = 'campaign'
+              AND stat_date BETWEEN date('now', ?) AND date('now', '-1 day')
+        """, (f"-{days} days",)).fetchone()
+    return dict(row) if row else {}
+
+
+def get_northbeam_campaign_window(days: int) -> list[dict]:
+    """Per-campaign Northbeam totals for the last N days, ordered by spend desc."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT
+                entity_id,
+                entity_name,
+                SUM(spend)        as spend,
+                SUM(revenue)      as revenue,
+                CASE WHEN SUM(spend) > 0 THEN SUM(revenue)/SUM(spend) ELSE 0 END as roas,
+                SUM(conversions)  as conversions,
+                SUM(new_visitors) as new_visitors,
+                COUNT(DISTINCT stat_date) as days_of_data
+            FROM northbeam_daily_stats
+            WHERE level = 'campaign'
+              AND stat_date BETWEEN date('now', ?) AND date('now', '-1 day')
+            GROUP BY entity_id, entity_name
+            ORDER BY spend DESC
+        """, (f"-{days} days",)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_northbeam_ad_window(days: int, limit: int = 25) -> list[dict]:
+    """Per-ad Northbeam totals for the last N days, top N by spend."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT
+                entity_id,
+                entity_name,
+                SUM(spend)        as spend,
+                SUM(revenue)      as revenue,
+                CASE WHEN SUM(spend) > 0 THEN SUM(revenue)/SUM(spend) ELSE 0 END as roas,
+                SUM(conversions)  as conversions,
+                SUM(new_visitors) as new_visitors,
+                COUNT(DISTINCT stat_date) as days_of_data
+            FROM northbeam_daily_stats
+            WHERE level = 'ad'
+              AND stat_date BETWEEN date('now', ?) AND date('now', '-1 day')
+            GROUP BY entity_id, entity_name
+            ORDER BY spend DESC
+            LIMIT ?
+        """, (f"-{days} days", limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── pinterest_ad_group_stats helpers ──────────────────────────────────────────
+
+def upsert_ad_group_stat(record: dict) -> None:
+    """Insert or overwrite a single day's Pinterest ad group metrics."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO pinterest_ad_group_stats
+                (stat_date, ad_group_id, ad_group_name, campaign_id, brand, campaign_type,
+                 spend_usd, revenue_usd, roas, impressions, clicks, ctr, conversions, ncpa)
+            VALUES
+                (:stat_date, :ad_group_id, :ad_group_name, :campaign_id, :brand, :campaign_type,
+                 :spend_usd, :revenue_usd, :roas, :impressions, :clicks, :ctr, :conversions, :ncpa)
+            ON CONFLICT(stat_date, ad_group_id) DO UPDATE SET
+                ad_group_name = excluded.ad_group_name,
+                spend_usd     = excluded.spend_usd,
+                revenue_usd   = excluded.revenue_usd,
+                roas          = excluded.roas,
+                impressions   = excluded.impressions,
+                clicks        = excluded.clicks,
+                ctr           = excluded.ctr,
+                conversions   = excluded.conversions,
+                ncpa          = excluded.ncpa
+        """, record)
+
+
+def get_ad_group_window(days: int) -> list[dict]:
+    """Per-ad-group Pinterest totals for the last N days, ordered by spend desc."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT
+                ad_group_id,
+                ad_group_name,
+                campaign_id,
+                brand,
+                campaign_type,
+                SUM(spend_usd)    as spend_usd,
+                SUM(revenue_usd)  as revenue_usd,
+                CASE WHEN SUM(spend_usd) > 0 THEN SUM(revenue_usd)/SUM(spend_usd) ELSE 0 END as roas,
+                SUM(impressions)  as impressions,
+                SUM(clicks)       as clicks,
+                CASE WHEN SUM(impressions) > 0 THEN SUM(clicks)*1.0/SUM(impressions) ELSE 0 END as ctr,
+                SUM(conversions)  as conversions,
+                COUNT(DISTINCT stat_date) as days_of_data
+            FROM pinterest_ad_group_stats
+            WHERE stat_date BETWEEN date('now', ?) AND date('now', '-1 day')
+            GROUP BY ad_group_id, ad_group_name, campaign_id, brand, campaign_type
+            ORDER BY spend_usd DESC
+        """, (f"-{days} days",)).fetchall()
+    return [dict(r) for r in rows]

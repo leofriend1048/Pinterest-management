@@ -16,7 +16,6 @@ from datetime import date, timedelta
 import anthropic
 
 import config
-from connectors import northbeam_connector
 from state import db
 
 log = logging.getLogger(__name__)
@@ -76,16 +75,26 @@ def _build_snapshot() -> dict:
     w30_base   = _window(30)
     w90_base   = _window(90)
 
-    # Fetch new_visitors from Northbeam for 1d and 7d windows
-    try:
-        nb_1d = northbeam_connector.fetch_multiwindow_campaign_roas(windows=(1,)).get(1, {})
-        nb_7d = northbeam_connector.fetch_multiwindow_campaign_roas(windows=(7,)).get(7, {})
-        new_visitors_1d = {cid: d.get("new_visitors", 0) for cid, d in nb_1d.items()}
-        new_visitors_7d = {cid: d.get("new_visitors", 0) for cid, d in nb_7d.items()}
-    except Exception as exc:
-        log.warning("Could not fetch new_visitors from Northbeam: %s", exc)
-        new_visitors_1d = {}
-        new_visitors_7d = {}
+    # Northbeam windows from stored daily stats (no live API calls here)
+    nb_account = {
+        "1d":  db.get_northbeam_account_window(1),
+        "3d":  db.get_northbeam_account_window(3),
+        "7d":  db.get_northbeam_account_window(7),
+    }
+    nb_campaigns = {
+        "1d":  db.get_northbeam_campaign_window(1),
+        "3d":  db.get_northbeam_campaign_window(3),
+        "7d":  db.get_northbeam_campaign_window(7),
+    }
+    nb_ads = {
+        "1d":  db.get_northbeam_ad_window(1),
+        "3d":  db.get_northbeam_ad_window(3),
+        "7d":  db.get_northbeam_ad_window(7),
+    }
+
+    # Pinterest ad group data
+    ag_1d = db.get_ad_group_window(1)
+    ag_7d = db.get_ad_group_window(7)
 
     # Recent budget decisions
     with db.get_db() as conn:
@@ -101,33 +110,45 @@ def _build_snapshot() -> dict:
         ]
 
     return {
-        "snapshot_date": today,
-        "brands":        config.BRANDS,
+        "snapshot_date":  today,
+        "brands":         config.BRANDS,
         "campaign_types": config.CAMPAIGN_TYPES,
-        "target_roas":   config.TARGET_ROAS,
+        "target_roas":    config.TARGET_ROAS,
+        # Pinterest platform data (from performance_snapshots)
         "daily": {
             "performance": yesterday,
-            "description": "Yesterday's actuals per brand/campaign_type",
+            "description": "Yesterday's Pinterest platform actuals per brand/campaign_type",
         },
         "weekly": {
             "baseline_7d": w7_base,
-            "description": "7-day rolling average per brand/campaign_type",
+            "description": "7-day rolling Pinterest platform average per brand/campaign_type",
         },
         "monthly": {
             "baseline_30d": w30_base,
-            "description": "30-day rolling average per brand/campaign_type",
+            "description": "30-day rolling Pinterest platform average per brand/campaign_type",
         },
         "quarterly": {
             "baseline_90d": w90_base,
-            "description": "90-day rolling average per brand/campaign_type",
+            "description": "90-day rolling Pinterest platform average per brand/campaign_type",
+        },
+        # Northbeam attributed data by window (from northbeam_daily_stats)
+        "northbeam": {
+            "account":   nb_account,
+            "campaigns": nb_campaigns,
+            "ads":       nb_ads,
+            "description": (
+                "Northbeam-attributed spend/revenue/ROAS/conversions/new_visitors. "
+                "days_of_data shows how many days are in the DB for that window."
+            ),
+        },
+        # Pinterest ad set (ad group) data
+        "ad_sets": {
+            "yesterday": ag_1d,
+            "7d":        ag_7d,
+            "description": "Pinterest platform metrics at ad group (ad set) level",
         },
         "recent_budget_decisions": recent_decisions,
         "recent_graduations":      recent_graduations,
-        "new_visitors": {
-            "yesterday_by_campaign": new_visitors_1d,
-            "7d_by_campaign":        new_visitors_7d,
-            "description": "Count of new (first-time) visitors attributed to each campaign by Northbeam",
-        },
     }
 
 

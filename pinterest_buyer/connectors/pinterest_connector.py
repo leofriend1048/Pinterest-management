@@ -409,6 +409,77 @@ def list_ads_in_campaign(campaign_id: str) -> list[dict]:
     return resp.get("items", [])
 
 
+def list_all_ad_groups() -> list[dict]:
+    """Return all active ad groups across the account (handles pagination)."""
+    items: list[dict] = []
+    params: dict = {"page_size": 250, "entity_statuses": "ACTIVE"}
+    while True:
+        resp = _req(
+            "GET",
+            f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/ad_groups",
+            params=params,
+        )
+        items.extend(resp.get("items", []))
+        bookmark = resp.get("bookmark")
+        if not bookmark:
+            break
+        params["bookmark"] = bookmark
+    return [
+        {
+            "id":          ag.get("id"),
+            "name":        ag.get("name", ""),
+            "campaign_id": ag.get("campaign_id", ""),
+            "status":      ag.get("status", ""),
+        }
+        for ag in items
+    ]
+
+
+def get_ad_group_analytics(
+    ad_group_ids: list[str],
+    start_date: str,
+    end_date: str,
+) -> list[dict]:
+    """Fetch ad group (ad set) level analytics."""
+    ids_param = ",".join(ad_group_ids)
+    resp = _req(
+        "GET",
+        f"/ad_accounts/{config.PINTEREST_AD_ACCOUNT_ID}/ad_groups/analytics",
+        params={
+            "ad_group_ids":      ids_param,
+            "start_date":        start_date,
+            "end_date":          end_date,
+            "columns":           (
+                "AD_GROUP_ID,SPEND_IN_DOLLAR,TOTAL_CONVERSIONS,"
+                "TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR,"
+                "PAID_IMPRESSION,CLICKTHROUGH_1"
+            ),
+            "granularity":       "TOTAL",
+            "click_window_days": config.CLICK_WINDOW_DAYS,
+            "view_window_days":  config.VIEW_WINDOW_DAYS,
+        },
+    )
+    results = []
+    for row in resp if isinstance(resp, list) else []:
+        spend       = float(row.get("SPEND_IN_DOLLAR", 0) or 0)
+        revenue     = float(row.get("TOTAL_WEB_CHECKOUT_VALUE_IN_MICRO_DOLLAR", 0) or 0) / 1_000_000
+        imps        = int(row.get("PAID_IMPRESSION", 0) or 0)
+        clicks      = int(row.get("CLICKTHROUGH_1", 0) or 0)
+        conversions = int(row.get("TOTAL_CONVERSIONS", 0) or 0)
+        results.append({
+            "ad_group_id": row.get("AD_GROUP_ID"),
+            "spend":       spend,
+            "revenue":     revenue,
+            "roas":        revenue / spend if spend else 0.0,
+            "impressions": imps,
+            "clicks":      clicks,
+            "ctr":         clicks / imps if imps else 0.0,
+            "conversions": conversions,
+            "ncpa":        spend / conversions if conversions else 0.0,
+        })
+    return results
+
+
 def list_campaigns() -> list[dict]:
     """Return all campaigns (handles pagination)."""
     items: list[dict] = []

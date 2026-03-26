@@ -261,6 +261,127 @@ def _snapshot_daily_campaign_performance() -> None:
     log.info("Daily campaign snapshot complete: %d campaigns persisted for %s.", saved, yesterday)
 
 
+# ── Northbeam daily stats ingestion ──────────────────────────────────────────
+
+def _ingest_northbeam_daily_stats() -> None:
+    """
+    Pull yesterday's Northbeam Pinterest data at campaign and ad level and
+    persist to northbeam_daily_stats.  Over time this table accumulates history
+    so the anomaly agent and digest can query any window (1d/3d/7d) from stored rows
+    rather than making live API calls per window.
+    """
+    from connectors import northbeam_connector as nb
+    from datetime import date as _date, timedelta as _td
+    yesterday = (_date.today() - _td(days=1)).isoformat()
+
+    # Campaign level
+    try:
+        camp_data = nb.fetch_multiwindow_campaign_roas(windows=(1,)).get(1, {})
+        for entity_id, metrics in camp_data.items():
+            db.upsert_northbeam_stat({
+                "stat_date":    yesterday,
+                "level":        "campaign",
+                "entity_id":    entity_id,
+                "entity_name":  metrics.get("name"),
+                "spend":        metrics.get("spend", 0.0),
+                "revenue":      metrics.get("revenue", 0.0),
+                "roas":         metrics.get("roas", 0.0),
+                "conversions":  metrics.get("conversions", 0),
+                "new_visitors": metrics.get("new_visitors", 0.0),
+            })
+        log.info("Northbeam daily ingest: %d campaign rows for %s.", len(camp_data), yesterday)
+    except Exception as exc:
+        log.error("Northbeam campaign daily ingest failed: %s", exc)
+
+    # Ad level
+    try:
+        ad_data = nb.fetch_multiwindow_ad_roas(windows=(1,)).get(1, {})
+        for entity_id, metrics in ad_data.items():
+            db.upsert_northbeam_stat({
+                "stat_date":    yesterday,
+                "level":        "ad",
+                "entity_id":    entity_id,
+                "entity_name":  metrics.get("name"),
+                "spend":        metrics.get("spend", 0.0),
+                "revenue":      metrics.get("revenue", 0.0),
+                "roas":         metrics.get("roas", 0.0),
+                "conversions":  metrics.get("conversions", 0),
+                "new_visitors": metrics.get("new_visitors", 0.0),
+            })
+        log.info("Northbeam daily ingest: %d ad rows for %s.", len(ad_data), yesterday)
+    except Exception as exc:
+        log.error("Northbeam ad daily ingest failed: %s", exc)
+
+
+# ── Pinterest ad group snapshot ───────────────────────────────────────────────
+
+def _ingest_ad_group_stats() -> None:
+    """
+    Fetch yesterday's ad group (ad set) level analytics from Pinterest and
+    persist to pinterest_ad_group_stats.
+    """
+    from datetime import date as _date, timedelta as _td
+    yesterday = (_date.today() - _td(days=1)).isoformat()
+
+    all_campaigns = db.get_active_campaigns()
+    if not all_campaigns:
+        return
+
+    camp_meta = {
+        c.get("pinterest_campaign_id") or c["campaign_id"]: c
+        for c in all_campaigns
+    }
+
+    try:
+        ad_groups = pinterest.list_all_ad_groups()
+    except Exception as exc:
+        log.warning("Ad group list failed: %s", exc)
+        return
+
+    if not ad_groups:
+        return
+
+    ag_ids   = [ag["id"] for ag in ad_groups if ag.get("id")]
+    ag_names = {ag["id"]: ag.get("name", "") for ag in ad_groups}
+    ag_camp  = {ag["id"]: ag.get("campaign_id", "") for ag in ad_groups}
+
+    # Batch analytics (Pinterest allows up to 100 IDs per call)
+    batch_size = 100
+    analytics: list[dict] = []
+    for i in range(0, len(ag_ids), batch_size):
+        batch = ag_ids[i:i + batch_size]
+        try:
+            analytics.extend(pinterest.get_ad_group_analytics(batch, yesterday, yesterday))
+        except Exception as exc:
+            log.warning("Ad group analytics batch failed: %s", exc)
+
+    saved = 0
+    for row in analytics:
+        ag_id    = row.get("ad_group_id")
+        camp_id  = ag_camp.get(ag_id, "")
+        camp     = camp_meta.get(camp_id, {})
+        spend    = row.get("spend", 0.0)
+        revenue  = row.get("revenue", 0.0)
+        db.upsert_ad_group_stat({
+            "stat_date":     yesterday,
+            "ad_group_id":   ag_id,
+            "ad_group_name": ag_names.get(ag_id, ""),
+            "campaign_id":   camp_id,
+            "brand":         camp.get("brand"),
+            "campaign_type": camp.get("campaign_type"),
+            "spend_usd":     spend,
+            "revenue_usd":   revenue,
+            "roas":          revenue / spend if spend else 0.0,
+            "impressions":   row.get("impressions", 0),
+            "clicks":        row.get("clicks", 0),
+            "ctr":           row.get("ctr", 0.0),
+            "conversions":   row.get("conversions", 0),
+            "ncpa":          row.get("ncpa", 0.0),
+        })
+        saved += 1
+    log.info("Ad group snapshot complete: %d ad groups persisted for %s.", saved, yesterday)
+
+
 # ── Daypart + keyword ingestion ───────────────────────────────────────────────
 
 def _ingest_daypart_and_keywords() -> None:
@@ -352,18 +473,20 @@ def daily_run() -> None:
     Full 3 AM daily run.
 
     Order of operations:
-    1. Ensure scale campaigns exist for all brands
-    2. Weekly discovery launch (Mondays only)
-    3. Monthly Performance+ challenger (first Monday only)
-    4. Scale graduation check
-    5. Budget optimization
-    6. Ad-level pause audit
-    7. Daily campaign performance snapshot
-    8. Daypart + keyword ingestion
-    9. Anomaly detection agent
-    10. Orchestrator agent (strategic decisions on top of rule-based engines)
-    11. Calibration review (Mondays only)
-    12. Opportunity agent (Mondays only)
+    1.  Ensure scale campaigns exist for all brands
+    2.  Weekly discovery launch (Mondays only)
+    3.  Monthly Performance+ challenger (first Monday only)
+    4.  Scale graduation check
+    5.  Budget optimization
+    6.  Ad-level pause audit
+    7.  Daily campaign performance snapshot (performance_snapshots)
+    8.  Northbeam daily stats — campaign + ad level (northbeam_daily_stats)
+    9.  Pinterest ad group snapshot (pinterest_ad_group_stats)
+    10. Daypart + keyword ingestion
+    11. Anomaly detection agent
+    12. Orchestrator agent
+    13. Calibration review (Mondays only)
+    14. Opportunity agent (Mondays only)
     """
     global _digest_payload
 
@@ -431,14 +554,28 @@ def daily_run() -> None:
     except Exception as exc:
         log.error("Daily campaign snapshot failed: %s", exc)
 
-    # Step 8: Daypart + keyword ingestion (feeds fatigue detector & opportunity agent)
+    # Step 8: Northbeam daily stats — campaign + ad level (builds historical window data)
+    log.info("Ingesting Northbeam daily stats...")
+    try:
+        _ingest_northbeam_daily_stats()
+    except Exception as exc:
+        log.error("Northbeam daily ingest failed: %s", exc)
+
+    # Step 9: Pinterest ad group snapshot
+    log.info("Snapshotting ad group performance...")
+    try:
+        _ingest_ad_group_stats()
+    except Exception as exc:
+        log.error("Ad group snapshot failed: %s", exc)
+
+    # Step 10: Daypart + keyword ingestion (feeds fatigue detector & opportunity agent)
     log.info("Ingesting daypart and keyword data...")
     try:
         _ingest_daypart_and_keywords()
     except Exception as exc:
         log.error("Daypart/keyword ingestion failed: %s", exc)
 
-    # Step 9: AI agent — anomaly detection
+    # Step 11: AI agent — anomaly detection
     log.info("Running anomaly detection agent...")
     anomaly_result: dict = {"anomalies": [], "summary": ""}
     try:
@@ -446,7 +583,7 @@ def daily_run() -> None:
     except Exception as exc:
         log.error("Anomaly detection failed: %s", exc)
 
-    # Step 10: Orchestrator agent — strategic decisions on top of rule-based engines
+    # Step 12: Orchestrator agent — strategic decisions on top of rule-based engines
     log.info("Running orchestrator agent...")
     orchestrator_actions: list[dict] = []
     try:
@@ -458,7 +595,7 @@ def daily_run() -> None:
     except Exception as exc:
         log.error("Orchestrator agent failed: %s", exc)
 
-    # Step 11 (Mondays): Calibration review — compare orchestrator predictions to actuals
+    # Step 13 (Mondays): Calibration review — compare orchestrator predictions to actuals
     calibration_summary: str | None = None
     if _is_monday():
         log.info("Monday — running calibration review...")
@@ -469,7 +606,7 @@ def daily_run() -> None:
         except Exception as exc:
             log.error("Calibration review failed: %s", exc)
 
-    # Step 12 (Mondays): Opportunity agent
+    # Step 14 (Mondays): Opportunity agent
     opportunity_report: str | None = None
     if _is_monday():
         log.info("Monday — running opportunity agent...")

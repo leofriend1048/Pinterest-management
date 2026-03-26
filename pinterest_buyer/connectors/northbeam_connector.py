@@ -275,6 +275,13 @@ def _parse_rows(rows: list[dict], id_candidates: list[str]) -> dict[str, dict]:
         log.error("Northbeam: ID column not found in CSV")
         return {}
 
+    # Try to find an entity name column adjacent to the ID
+    _NAME_CANDIDATES = [
+        "campaign_name", "Campaign Name", "Campaign",
+        "ad_name", "Ad Name", "Ad",
+        "name", "Name",
+    ]
+
     result: dict[str, dict] = {}
     for row in rows:
         entity_id = row.get(id_col, "").strip()
@@ -293,7 +300,13 @@ def _parse_rows(rows: list[dict], id_candidates: list[str]) -> dict[str, dict]:
         new_visitors = _parse_float(
             row.get("new_visitors") or row.get("New Visitors") or row.get("new_visitor_sessions") or 0
         )
+        # Capture entity name for human-readable reporting
+        entity_name = next(
+            (row[k].strip() for k in _NAME_CANDIDATES if row.get(k, "").strip()),
+            None,
+        )
         result[entity_id] = {
+            "name":         entity_name,
             "spend":        spend,
             "revenue":      revenue,
             "roas":         roas,
