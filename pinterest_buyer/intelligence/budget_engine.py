@@ -125,6 +125,91 @@ def _days_since_launch(launch_date_str: str | None) -> int:
         return 0
 
 
+# ── Data-gap helpers ──────────────────────────────────────────────────────────
+
+def _fire_data_gap_alert(
+    brand: str,
+    campaign: dict,
+    campaign_id: str,
+    spend_1d: float,
+    nb_present: bool,
+) -> None:
+    if nb_present:
+        root_cause = (
+            f"Campaign {campaign_id} IS in Northbeam's export but attributed revenue "
+            "is 0.0 across all windows. Likely causes: Pinterest checkout pixel stopped "
+            "firing, UTM parameters changed/missing, or Northbeam attribution model "
+            "disconnected from this campaign's conversions."
+        )
+        recommended_action = (
+            "1) Open Northbeam → verify campaign is receiving conversion events. "
+            "2) Check Pinterest tag diagnostics for checkout pixel fires. "
+            "3) Confirm UTM parameters on ad URLs match Northbeam's source mapping. "
+            "Budget held until attribution is restored."
+        )
+    else:
+        root_cause = (
+            f"Campaign {campaign_id} is NOT present in Northbeam's data export at all "
+            "and Pinterest native also shows 0 attributed revenue. Campaign may have been "
+            "recently cloned/re-created causing an ID linkage break in Northbeam, or "
+            "the Pinterest checkout pixel is not firing for this campaign."
+        )
+        recommended_action = (
+            "1) In Northbeam, search for this campaign by name and verify it is linked "
+            f"to campaign ID {campaign_id}. If missing, re-connect it. "
+            "2) Check Pinterest tag for checkout events on this campaign. "
+            "3) Cross-check Shopify/GA4 for actual sales attributed to this campaign. "
+            "Budget held until attribution is confirmed."
+        )
+    log.warning(
+        "[%s/%s] DATA GAP on campaign %s — $%.0f spend, 0.0x ROAS from %s. %s",
+        brand, campaign["campaign_type"], campaign_id, spend_1d,
+        "Northbeam (present, 0 revenue)" if nb_present else "Northbeam (absent) + Pinterest native",
+        root_cause,
+    )
+    slack.alert_p0_anomaly(
+        brand=brand,
+        what_changed=(
+            "Attribution data gap — 0.0x ROAS across all windows despite active spend "
+            f"({'Northbeam present but 0 revenue' if nb_present else 'campaign missing from Northbeam export'})"
+        ),
+        magnitude=f"${spend_1d:.0f}/day spend, 0.0x ROAS (1d/3d/7d)",
+        root_cause=root_cause,
+        recommended_action=recommended_action,
+    )
+
+
+def _data_gap_hold(
+    campaign: dict,
+    campaign_id: str,
+    brand: str,
+    current_budget: float,
+    target_roas: float,
+    spend_1d: float,
+    nb_present: bool,
+) -> dict:
+    rationale = (
+        f"DATA GAP ({'Northbeam present, 0 revenue' if nb_present else 'campaign absent from Northbeam'}) "
+        f"— ${spend_1d:.0f} spent yesterday, 0.0x ROAS all windows. "
+        "Budget held until attribution is confirmed."
+    )
+    return {
+        "campaign_id":      campaign_id,
+        "brand":            brand,
+        "campaign_type":    campaign["campaign_type"],
+        "prior_budget_usd": current_budget,
+        "new_budget_usd":   current_budget,
+        "roas_basis":       0.0,
+        "roas_1d":          0.0,
+        "roas_3d":          0.0,
+        "roas_7d":          0.0,
+        "target_roas":      target_roas,
+        "roas_ratio":       0.0,
+        "action":           "hold",
+        "rationale":        rationale,
+    }
+
+
 # ── Decision logic ────────────────────────────────────────────────────────────
 
 def _decide(
@@ -149,48 +234,44 @@ def _decide(
     spend_1d = _resolve_spend(pin_id, 1, platform_windows)
 
     # ── Data-gap guard ────────────────────────────────────────────────────────
-    # If the campaign is actively spending but every ROAS window is zero from
-    # both Northbeam and Pinterest native, attribution is broken — not the
-    # campaign. Making budget decisions on invisible data is worse than skipping.
+    # Distinguish three cases before proceeding:
+    #   A) Campaign absent from Northbeam export entirely (ID not in response)
+    #      → fall back to Pinterest native; only alert if Pinterest is also 0
+    #   B) Campaign present in Northbeam but all windows are 0.0 (pixel/UTM issue)
+    #      → alert immediately; Pinterest native may still be usable
+    #   C) Both sources are 0 despite real spend → P0 alert, hold budget
+    nb_present = any(
+        pin_id in nb_windows.get(d, {}) for d in _WINDOWS
+    )
+    pin_roas_1d = platform_windows.get(1, {}).get(pin_id, {}).get("roas", 0.0)
+    pin_roas_3d = platform_windows.get(3, {}).get(pin_id, {}).get("roas", 0.0)
+    pin_roas_7d = platform_windows.get(7, {}).get(pin_id, {}).get("roas", 0.0)
+
     if spend_1d >= config.MIN_SPEND_FOR_DECISION and roas_1d == 0.0 and roas_3d == 0.0 and roas_7d == 0.0:
-        rationale = (
-            f"DATA GAP — campaign spent ${spend_1d:.0f} yesterday but all ROAS "
-            f"windows (1d/3d/7d) are 0.0 from both Northbeam and Pinterest native. "
-            f"Attribution appears broken. No budget change made — verify pixel, "
-            f"UTM parameters, and Northbeam connection for campaign {campaign_id}."
-        )
-        log.warning("[%s/%s] %s", brand, campaign["campaign_type"], rationale)
-        slack.alert_p0_anomaly(
-            brand=brand,
-            what_changed="Attribution data gap — all ROAS windows are 0.0 despite active spend",
-            magnitude=f"${spend_1d:.0f} spent yesterday, 0.0x ROAS across 1d/3d/7d",
-            root_cause=(
-                "Northbeam and Pinterest native both show zero attributed revenue. "
-                "Likely causes: broken checkout pixel, UTM mismatch, or Northbeam "
-                f"disconnected from campaign {campaign_id}."
-            ),
-            recommended_action=(
-                "1) Check Northbeam campaign linkage for this campaign ID. "
-                "2) Verify Pinterest tag is firing on checkout. "
-                "3) Cross-check Shopify/GA4 for actual sales during this period. "
-                "Budget held until attribution is confirmed."
-            ),
-        )
-        return {
-            "campaign_id":      campaign_id,
-            "brand":            brand,
-            "campaign_type":    campaign["campaign_type"],
-            "prior_budget_usd": current_budget,
-            "new_budget_usd":   current_budget,
-            "roas_basis":       0.0,
-            "roas_1d":          0.0,
-            "roas_3d":          0.0,
-            "roas_7d":          0.0,
-            "target_roas":      target_roas,
-            "roas_ratio":       0.0,
-            "action":           "hold",
-            "rationale":        rationale,
-        }
+        if not nb_present:
+            # Case A: campaign simply not in Northbeam export — log a warning
+            # but allow Pinterest native ROAS to drive the decision if it has data.
+            log.warning(
+                "[%s/%s] Campaign %s not found in Northbeam export — "
+                "using Pinterest native ROAS only (1d=%.2fx 3d=%.2fx 7d=%.2fx).",
+                brand, campaign["campaign_type"], campaign_id,
+                pin_roas_1d, pin_roas_3d, pin_roas_7d,
+            )
+            if pin_roas_1d > 0 or pin_roas_3d > 0 or pin_roas_7d > 0:
+                # Pinterest native has data — proceed with that, no alert needed
+                pass  # falls through to normal tier logic below
+            else:
+                # Case C: absent from Northbeam AND Pinterest native also shows 0
+                _fire_data_gap_alert(brand, campaign, campaign_id, spend_1d,
+                                     nb_present=False)
+                return _data_gap_hold(campaign, campaign_id, brand, current_budget,
+                                      target_roas, spend_1d, nb_present=False)
+        else:
+            # Case B/C: Northbeam has the campaign but ROAS is 0 across all windows
+            _fire_data_gap_alert(brand, campaign, campaign_id, spend_1d,
+                                 nb_present=True)
+            return _data_gap_hold(campaign, campaign_id, brand, current_budget,
+                                  target_roas, spend_1d, nb_present=True)
     # ─────────────────────────────────────────────────────────────────────────
 
     w_roas = _weighted_roas(roas_1d, roas_3d, roas_7d)
