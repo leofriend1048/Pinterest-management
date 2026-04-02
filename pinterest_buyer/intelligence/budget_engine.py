@@ -34,6 +34,7 @@ from datetime import date, timedelta
 
 import config
 from connectors import northbeam_connector, pinterest_connector as pinterest
+from notifications import slack
 from state import db
 
 log = logging.getLogger(__name__)
@@ -146,6 +147,51 @@ def _decide(
     roas_3d = _resolve_roas(pin_id, 3, nb_windows, platform_windows)
     roas_7d = _resolve_roas(pin_id, 7, nb_windows, platform_windows)
     spend_1d = _resolve_spend(pin_id, 1, platform_windows)
+
+    # ── Data-gap guard ────────────────────────────────────────────────────────
+    # If the campaign is actively spending but every ROAS window is zero from
+    # both Northbeam and Pinterest native, attribution is broken — not the
+    # campaign. Making budget decisions on invisible data is worse than skipping.
+    if spend_1d >= config.MIN_SPEND_FOR_DECISION and roas_1d == 0.0 and roas_3d == 0.0 and roas_7d == 0.0:
+        rationale = (
+            f"DATA GAP — campaign spent ${spend_1d:.0f} yesterday but all ROAS "
+            f"windows (1d/3d/7d) are 0.0 from both Northbeam and Pinterest native. "
+            f"Attribution appears broken. No budget change made — verify pixel, "
+            f"UTM parameters, and Northbeam connection for campaign {campaign_id}."
+        )
+        log.warning("[%s/%s] %s", brand, campaign["campaign_type"], rationale)
+        slack.alert_p0_anomaly(
+            brand=brand,
+            what_changed="Attribution data gap — all ROAS windows are 0.0 despite active spend",
+            magnitude=f"${spend_1d:.0f} spent yesterday, 0.0x ROAS across 1d/3d/7d",
+            root_cause=(
+                "Northbeam and Pinterest native both show zero attributed revenue. "
+                "Likely causes: broken checkout pixel, UTM mismatch, or Northbeam "
+                f"disconnected from campaign {campaign_id}."
+            ),
+            recommended_action=(
+                "1) Check Northbeam campaign linkage for this campaign ID. "
+                "2) Verify Pinterest tag is firing on checkout. "
+                "3) Cross-check Shopify/GA4 for actual sales during this period. "
+                "Budget held until attribution is confirmed."
+            ),
+        )
+        return {
+            "campaign_id":      campaign_id,
+            "brand":            brand,
+            "campaign_type":    campaign["campaign_type"],
+            "prior_budget_usd": current_budget,
+            "new_budget_usd":   current_budget,
+            "roas_basis":       0.0,
+            "roas_1d":          0.0,
+            "roas_3d":          0.0,
+            "roas_7d":          0.0,
+            "target_roas":      target_roas,
+            "roas_ratio":       0.0,
+            "action":           "hold",
+            "rationale":        rationale,
+        }
+    # ─────────────────────────────────────────────────────────────────────────
 
     w_roas = _weighted_roas(roas_1d, roas_3d, roas_7d)
     ratio  = w_roas / target_roas if target_roas else 0.0
