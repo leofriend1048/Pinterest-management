@@ -181,7 +181,10 @@ def _download_csv(url: str) -> list[dict]:
     resp.raise_for_status()
     rows = list(csv.DictReader(io.StringIO(resp.text)))
     if rows:
-        log.debug("Northbeam CSV columns: %s", list(rows[0].keys()))
+        log.info("Northbeam CSV columns: %s  (first row sample: %s)",
+                 list(rows[0].keys()), dict(list(rows[0].items())[:6]))
+    else:
+        log.warning("Northbeam CSV: response was empty (0 rows)")
     return rows
 
 
@@ -247,11 +250,23 @@ def _run_export_range(level: str, platform: str, start: date, end: date) -> list
 # ── CSV parsing ───────────────────────────────────────────────────────────────
 
 def _find_col(row: dict, candidates: list[str]) -> str:
+    # Exact match first (fastest)
     for key in candidates:
         if key in row:
             return key
-    log.warning("Northbeam CSV: column not found among %s. Available: %s",
-                candidates, list(row.keys()))
+    # Case-insensitive + strip-whitespace fallback (handles "Campaign ID", "campaign id", etc.)
+    row_lower = {k.strip().lower(): k for k in row}
+    for key in candidates:
+        normalised = key.strip().lower()
+        if normalised in row_lower:
+            actual = row_lower[normalised]
+            log.debug("Northbeam CSV: matched column %r via normalised key %r", actual, key)
+            return actual
+    log.error(
+        "Northbeam CSV: ID column not found. Tried %s. Available columns: %s",
+        candidates,
+        list(row.keys()),
+    )
     return ""
 
 
@@ -260,6 +275,21 @@ def _parse_float(val: Any) -> float:
         return float(val) if val not in (None, "", "null") else 0.0
     except (TypeError, ValueError):
         return 0.0
+
+
+def _get_metric(row: dict, *candidates: str) -> Any:
+    """Case-insensitive metric column lookup across a set of candidate names."""
+    # Try exact match first
+    for key in candidates:
+        if key in row and row[key] not in (None, ""):
+            return row[key]
+    # Case-insensitive fallback
+    row_lower = {k.lower(): v for k, v in row.items()}
+    for key in candidates:
+        v = row_lower.get(key.lower())
+        if v not in (None, ""):
+            return v
+    return None
 
 
 def _parse_rows(rows: list[dict], id_candidates: list[str]) -> dict[str, dict]:
@@ -277,12 +307,10 @@ def _parse_rows(rows: list[dict], id_candidates: list[str]) -> dict[str, dict]:
     if not rows:
         return {}
 
-    if rows:
-        log.debug("Northbeam CSV columns available: %s", list(rows[0].keys()))
-
     id_col = _find_col(rows[0], id_candidates)
     if not id_col:
-        log.error("Northbeam: ID column not found in CSV")
+        log.error("Northbeam _parse_rows: ID column not found in CSV. All columns: %s",
+                  list(rows[0].keys()))
         return {}
 
     # Try to find an entity name column adjacent to the ID
@@ -297,18 +325,19 @@ def _parse_rows(rows: list[dict], id_candidates: list[str]) -> dict[str, dict]:
         entity_id = row.get(id_col, "").strip()
         if not entity_id:
             continue
-        spend   = _parse_float(row.get("spend")        or row.get("Spend"))
-        revenue = _parse_float(row.get("rev")          or row.get("Revenue")
-                               or row.get("attributed_revenue"))
+        spend   = _parse_float(_get_metric(row, "spend", "Spend"))
+        revenue = _parse_float(_get_metric(row, "rev", "Revenue", "attributed_revenue",
+                                           "revenue", "Attributed Revenue"))
         # ROAS: use API value if present, else compute from rev/spend
-        roas = _parse_float(row.get("roas") or row.get("ROAS"))
+        roas = _parse_float(_get_metric(row, "roas", "ROAS", "Roas"))
         if roas == 0.0 and spend > 0 and revenue > 0:
             roas = revenue / spend
         conversions = int(_parse_float(
-            row.get("transactions") or row.get("Transactions") or 0
+            _get_metric(row, "transactions", "Transactions", "conversions", "Conversions") or 0
         ))
         new_visitors = _parse_float(
-            row.get("new_visitors") or row.get("New Visitors") or row.get("new_visitor_sessions") or 0
+            _get_metric(row, "new_visitors", "New Visitors", "new_visitor_sessions",
+                        "NewVisitors", "new visitor sessions") or 0
         )
         # Capture entity name for human-readable reporting
         entity_name = next(
@@ -323,6 +352,14 @@ def _parse_rows(rows: list[dict], id_candidates: list[str]) -> dict[str, dict]:
             "conversions":  conversions,
             "new_visitors": new_visitors,
         }
+
+    if result:
+        sample_ids = list(result.keys())[:5]
+        log.info("Northbeam _parse_rows: parsed %d entities via id_col=%r. Sample IDs: %s",
+                 len(result), id_col, sample_ids)
+    else:
+        log.warning("Northbeam _parse_rows: parsed 0 entities from %d rows (id_col=%r)",
+                    len(rows), id_col)
     return result
 
 
@@ -374,16 +411,18 @@ def _parse_rows_by_date(
             except ValueError:
                 continue
 
-        spend   = _parse_float(row.get("spend") or row.get("Spend"))
-        revenue = _parse_float(row.get("rev") or row.get("Revenue")
-                               or row.get("attributed_revenue"))
-        roas    = _parse_float(row.get("roas") or row.get("ROAS"))
+        spend   = _parse_float(_get_metric(row, "spend", "Spend"))
+        revenue = _parse_float(_get_metric(row, "rev", "Revenue", "attributed_revenue",
+                                           "revenue", "Attributed Revenue"))
+        roas    = _parse_float(_get_metric(row, "roas", "ROAS", "Roas"))
         if roas == 0.0 and spend > 0 and revenue > 0:
             roas = revenue / spend
-        conversions  = int(_parse_float(row.get("transactions") or row.get("Transactions") or 0))
+        conversions  = int(_parse_float(
+            _get_metric(row, "transactions", "Transactions", "conversions", "Conversions") or 0
+        ))
         new_visitors = _parse_float(
-            row.get("new_visitors") or row.get("New Visitors")
-            or row.get("new_visitor_sessions") or 0
+            _get_metric(row, "new_visitors", "New Visitors", "new_visitor_sessions",
+                        "NewVisitors") or 0
         )
         entity_name = next(
             (row[k].strip() for k in _NAME_CANDIDATES if row.get(k, "").strip()),
