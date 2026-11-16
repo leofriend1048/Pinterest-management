@@ -281,18 +281,6 @@ class Spec:
             "success_response": response,
         }
 
-    def array_style(self, op: Operation | None, name: str) -> str:
-        """How a list-valued query parameter is sent: 'csv' or 'repeat'."""
-        if op is None:
-            return "csv"
-        for param in op.raw.get("parameters", []):
-            if "$ref" in param:
-                param = self._ref(param["$ref"])
-            if param.get("name") == name and param.get("in") == "query":
-                return "csv" if param.get("explode") is False else "repeat"
-        return "csv"
-
-
 @lru_cache(maxsize=1)
 def load() -> Spec:
     data = resources.files("pinterest_ads_mcp").joinpath("data/openapi.json.gz").read_bytes()

@@ -130,9 +130,8 @@ def test_request_sends_token_query_and_json_body(spec):
     )
     assert seen["auth"] == "Bearer tok"
     assert "page_size=5" in seen["url"] and "skip" not in seen["url"]
-    assert ("campaign_ids=1%2C2" in seen["url"]) or (
-        "campaign_ids=1&campaign_ids=2" in seen["url"]
-    )
+    # Lists are comma-joined: Pinterest ignores all but the first repeated value.
+    assert "campaign_ids=1%2C2" in seen["url"] and "campaign_ids=1&" not in seen["url"]
 
     client.request(
         "PATCH", "/ad_accounts/{ad_account_id}/campaigns", body=[{"id": "1", "status": "PAUSED"}]
@@ -263,3 +262,19 @@ def test_search_tool_lists_areas_then_operations():
     assert "campaigns" in areas["tags"]
     hits = json.loads(server.pinterest_search_endpoints(query="create", tag="campaigns"))
     assert any(op["operation_id"] == "campaigns/create" for op in hits["operations"])
+
+
+def test_every_list_filter_is_comma_joined(spec):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["query"] = request.url.query.decode()
+        return httpx.Response(200, json={"items": []})
+
+    client = make_client(spec, handler)
+    client.request(
+        "GET", "/ad_accounts/{ad_account_id}/ad_groups",
+        query={"ad_group_ids": ["1", "2"], "entity_statuses": ["ACTIVE", "PAUSED", "ARCHIVED"]},
+    )
+    assert seen["query"].count("ad_group_ids=") == 1 and seen["query"].count("entity_statuses=") == 1
+    assert "ACTIVE%2CPAUSED%2CARCHIVED" in seen["query"]

@@ -98,11 +98,10 @@ class Client:
             if value is None:
                 continue
             if isinstance(value, (list, tuple)):
-                items = [self._scalar(v) for v in value]
-                if self.spec.array_style(op, key) == "csv":
-                    pairs.append((key, ",".join(items)))
-                else:
-                    pairs.extend((key, item) for item in items)
+                # Always comma-joined. Verified against the live API: when a list
+                # parameter is repeated (ids=1&ids=2) Pinterest silently uses only
+                # the first value, whatever the published spec says about style.
+                pairs.append((key, ",".join(self._scalar(v) for v in value)))
             else:
                 pairs.append((key, self._scalar(value)))
         return pairs

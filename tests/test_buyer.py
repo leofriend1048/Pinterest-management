@@ -1,3 +1,4 @@
+import base64
 import json
 from datetime import date
 
@@ -251,6 +252,11 @@ class CreativePinterest(FakePinterest):
         if path.endswith("/ads"):
             if method == "POST":
                 body = json.loads(request.content)
+                if getattr(self, "transcoding_attempts", 0) > 0:
+                    self.transcoding_attempts -= 1
+                    return httpx.Response(200, json={"items": [{"data": None, "exceptions": [{
+                        "code": 2945, "message": "If the video pin was recently created, please wait a "
+                        "few seconds for the video to be transcoded and try again."}]}]})
                 if self.fail_ad_named and body[0].get("name") == self.fail_ad_named:
                     return httpx.Response(200, json={"items": [{"data": None, "exceptions": [{"message": "rejected"}]}]})
                 self.created_ads.append(body)
@@ -279,7 +285,10 @@ class CreativePinterest(FakePinterest):
         if path.endswith("/media/m1"):
             return httpx.Response(200, json={"status": "succeeded"})
         if path.endswith("/pins"):
-            self.created_pins.append(json.loads(request.content))
+            body = json.loads(request.content)
+            if getattr(self, "refuse_pin_links", False) and "link" in body:
+                return httpx.Response(400, json={"code": 1, "message": "Sorry! This site doesn't allow you to save Pins."})
+            self.created_pins.append(body)
             return httpx.Response(201, json={"id": str(900 + len(self.created_pins))})
         if "/pins/" in path:
             if not self.pin_scope:
@@ -331,13 +340,16 @@ def test_launch_from_video_file_uploads_creates_pin_then_ad(monkeypatch, tmp_pat
     api = wire(monkeypatch, CreativePinterest())
     video = tmp_path / "hook.mp4"
     video.write_bytes(b"mp4")
+    (tmp_path / "hook.jpg").write_bytes(b"\xff\xd8cover")
     out = json.loads(buyer.pinterest_launch_ad(
         ad_group_id="10", video_path=str(video), name="Hook test",
         destination_url="https://shop.example/lp", title="Try it", status="ACTIVE"))
     pin = api.created_pins[0]
     assert pin["board_id"] == "b0" and pin["link"] == "https://shop.example/lp"
+    # Pinterest refuses video Pins without a cover image, so one is always sent.
     assert pin["media_source"] == {
-        "source_type": "video_id", "media_id": "m1", "cover_image_key_frame_time": 1}
+        "source_type": "video_id", "media_id": "m1", "cover_image_content_type": "image/jpeg",
+        "cover_image_data": base64.b64encode(b"\xff\xd8cover").decode()}
     ad = api.created_ads[0][0]
     assert (ad["pin_id"], ad["creative_type"], ad["status"]) == ("901", "VIDEO", "ACTIVE")
     assert out["new_pin_created"] is True
@@ -463,7 +475,9 @@ def creatives(tmp_path):
     folder = tmp_path / "new hooks"
     folder.mkdir()
     (folder / "hook-a.mp4").write_bytes(b"mp4-a")
+    (folder / "hook-a.jpg").write_bytes(JPEG)          # cover for hook-a.mp4
     (folder / "hook-b.mov").write_bytes(b"mov-b")
+    (folder / "hook-b.png").write_bytes(PNG)           # cover for hook-b.mov
     (folder / "static-1.png").write_bytes(PNG)
     (folder / "notes.txt").write_text("not a creative")
     (folder / ".DS_Store").write_bytes(b"x")
@@ -486,6 +500,9 @@ def test_scan_folder_lists_creatives_and_ignores_the_rest(creatives, monkeypatch
     assert (out["creatives"], out["videos"], out["images"]) == (3, 2, 1)
     assert out["ignored_files"] == ["notes.txt"] and out["copy_sheet"] == "ads.csv"
     by_name = {f["file"]: f for f in out["files"]}
+    # Images named like a video are that video's cover, not ads of their own.
+    assert set(by_name) == {"hook-a.mp4", "hook-b.mov", "static-1.png"}
+    assert by_name["hook-a.mp4"]["cover"] == "hook-a.jpg" and by_name["hook-b.mov"]["cover"] == "hook-b.png"
     assert by_name["static-1.png"]["aspect_ratio"] == "2:3"
     assert by_name["hook-a.mp4"]["copy_from_sheet"] == {
         "name": "Hook A", "title": "Glow in 3 minutes", "destination_url": "https://shop.example/a"}
@@ -591,3 +608,51 @@ def test_duplicate_ad_group_copies_settings_into_a_paused_copy(monkeypatch):
     buyer.pinterest_duplicate_ad_group("10", "With budget", daily_budget_usd=250)
     assert api.created_groups[1][0]["budget_in_micro_currency"] == 250_000_000
     assert api.created_groups[1][0]["budget_type"] == "DAILY"
+
+
+def test_pin_refusal_is_explained_in_terms_of_the_cover(monkeypatch, tmp_path):
+    api = wire(monkeypatch, CreativePinterest())
+    api.refuse_pin_links = True
+    image = tmp_path / "static.png"
+    image.write_bytes(PNG)
+    with pytest.raises(ValueError, match="cover image"):
+        buyer.pinterest_launch_ad(
+            ad_group_id="10", image_path=str(image), destination_url="https://shop.example/lp", title="T")
+    assert api.created_ads == []
+
+
+def test_video_without_any_cover_is_flagged_before_launch(tmp_path, monkeypatch):
+    monkeypatch.setattr(buyer.shutil, "which", lambda _: None)      # no ffmpeg, no ffprobe
+    (tmp_path / "raw.mp4").write_bytes(b"mp4")
+    out = json.loads(buyer.pinterest_scan_folder(str(tmp_path)))
+    assert "Needs a cover image" in out["files"][0]["problems"][0]
+    with pytest.raises(ValueError, match="needs a cover image"):
+        buyer._video_cover(tmp_path / "raw.mp4", None, None, 1)
+    assert buyer._video_cover(tmp_path / "raw.mp4", "https://x/c.jpg", None, 1) == {
+        "cover_image_url": "https://x/c.jpg"}
+
+
+def test_ad_creation_waits_for_a_new_video_to_finish_transcoding(monkeypatch, tmp_path):
+    api = wire(monkeypatch, CreativePinterest())
+    api.transcoding_attempts = 2
+    waits = []
+    monkeypatch.setattr(buyer, "_sleep", waits.append)
+    video = tmp_path / "hook.mp4"
+    video.write_bytes(b"mp4")
+    (tmp_path / "hook.jpg").write_bytes(JPEG)
+    out = json.loads(buyer.pinterest_launch_ad(
+        ad_group_id="10", video_path=str(video), destination_url="https://shop.example", title="T"))
+    assert out["ad_id"] == "777" and waits == [5, 10]
+    assert len(api.created_pins) == 1 and len(api.created_ads) == 1
+
+
+def test_ad_creation_gives_up_after_waiting_and_keeps_the_pin(monkeypatch, tmp_path):
+    api = wire(monkeypatch, CreativePinterest())
+    api.transcoding_attempts = 99
+    monkeypatch.setattr(buyer, "_sleep", lambda _: None)
+    video = tmp_path / "hook.mp4"
+    video.write_bytes(b"mp4")
+    (tmp_path / "hook.jpg").write_bytes(JPEG)
+    with pytest.raises(ValueError, match=r"pin_id 901.*Retry with pin_id"):
+        buyer.pinterest_launch_ad(
+            ad_group_id="10", video_path=str(video), destination_url="https://shop.example", title="T")

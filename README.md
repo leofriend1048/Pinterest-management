@@ -14,7 +14,7 @@ It answers in dollars, ROAS and CPA, and changes nothing unless you ask.
 <img alt="MCP server" src="https://img.shields.io/badge/MCP-server-E60023?style=flat-square">
 <img alt="Works with Claude Code and Claude Desktop" src="https://img.shields.io/badge/Claude-Code%20%2B%20Desktop-111111?style=flat-square">
 <img alt="Pinterest API v5, 266 endpoints" src="https://img.shields.io/badge/Pinterest%20API%20v5-266%20endpoints-E60023?style=flat-square">
-<img alt="100 tests passing" src="https://img.shields.io/badge/tests-100%20passing-2ea44f?style=flat-square">
+<img alt="105 tests passing" src="https://img.shields.io/badge/tests-105%20passing-2ea44f?style=flat-square">
 <img alt="macOS and Linux" src="https://img.shields.io/badge/macOS%20%7C%20Linux-supported-555555?style=flat-square">
 <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-555555?style=flat-square">
 </p>
@@ -218,6 +218,10 @@ and write a title for each from the file name.
 3. **You approve, it builds.** Each file is uploaded, turned into a Pin, and
    promoted as a **paused** ad. One Pin is shared across every ad set you name.
 
+Videos get a cover automatically: an image with the same file name
+(`hook-a.jpg` beside `hook-a.mp4`) if there is one, otherwise a frame taken from
+the video. New videos take Pinterest a few seconds to process; the tool waits.
+
 It is safe to run twice. The folder remembers what was launched, so a run that
 stopped halfway picks up where it left off and nothing is duplicated. Drop an
 optional `ads.csv` in the folder (`file, name, title, description, url`) if you
@@ -400,7 +404,7 @@ git clone https://github.com/leofriend1048/Pinterest-management.git
 cd Pinterest-management && uv sync
 
 uv run pinterest-ads-mcp setup            # registers this checkout with Claude
-uv run pytest                             # 100 tests, no network
+uv run pytest                             # 105 tests, no network
 uv run python scripts/update_spec.py      # pull Pinterest's latest API description
 uv run python scripts/render_screens.py   # regenerate the README screenshots
 ```

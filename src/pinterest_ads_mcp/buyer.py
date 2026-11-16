@@ -8,6 +8,7 @@ days", dollars per day.
 
 from __future__ import annotations
 
+import base64
 import csv
 import functools
 import json
@@ -15,6 +16,8 @@ import math
 import re
 import shutil
 import subprocess
+import tempfile
+import time
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
@@ -936,6 +939,49 @@ def pinterest_creative(
     return content
 
 
+TRANSCODE_WAITS = (5, 10, 15, 20, 20, 20, 30)      # seconds between attempts, about 2 minutes
+_sleep = time.sleep
+
+
+def _video_cover(video: Path, url: str | None, image: str | None, second: int) -> dict:
+    """The cover fields for a video Pin.
+
+    Pinterest refuses a video Pin that asks it to pick the cover frame itself
+    (the API answers "This site doesn't allow you to save Pins"), so a cover
+    image is always supplied: a URL, a file, an image beside the video with
+    the same name, or a frame taken from the video.
+    """
+    if url:
+        return {"cover_image_url": url}
+    candidates = [Path(image).expanduser()] if image else [
+        video.with_suffix(ext) for ext in (".jpg", ".jpeg", ".png", ".JPG", ".PNG")]
+    for candidate in candidates:
+        if candidate.is_file():
+            kind = "image/png" if candidate.suffix.lower() == ".png" else "image/jpeg"
+            return {"cover_image_content_type": kind,
+                    "cover_image_data": base64.b64encode(candidate.read_bytes()).decode()}
+    if image:
+        raise ValueError(f"Cover image not found: {image}")
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        with tempfile.TemporaryDirectory() as tmp:
+            frame = Path(tmp) / "cover.jpg"
+            for at in (max(0, second), 0):
+                subprocess.run(
+                    [ffmpeg, "-y", "-loglevel", "error", "-ss", str(at), "-i", str(video),
+                     "-frames:v", "1", "-q:v", "3", str(frame)],
+                    stdin=subprocess.DEVNULL, capture_output=True, timeout=120,
+                )
+                if frame.is_file() and frame.stat().st_size > 0:
+                    return {"cover_image_content_type": "image/jpeg",
+                            "cover_image_data": base64.b64encode(frame.read_bytes()).decode()}
+    raise ValueError(
+        f"'{video.name}' needs a cover image. Put an image with the same name next to it "
+        f"('{video.stem}.jpg'), pass cover_image_url, or install ffmpeg so a frame can be "
+        "taken from the video."
+    )
+
+
 def _pick_board(board_id: str | None) -> str:
     if board_id:
         return str(board_id)
@@ -972,6 +1018,7 @@ def pinterest_launch_ad(
     call_to_action: str | None = None,
     status: Literal["PAUSED", "ACTIVE"] = "PAUSED",
     creative_type: str | None = None,
+    cover_image_path: str | None = None,
 ) -> str:
     """Create an ad in an ad group (ad set), from an existing ad or new creative.
 
@@ -992,7 +1039,9 @@ def pinterest_launch_ad(
     destination_url should be the full landing page including tracking
     parameters; take the account's standard from pinterest_account_context.
     New Pins go on board_id (optional when the account has a single board).
-    For video, the cover is cover_image_url or the frame at cover_second.
+    A video needs a cover image: cover_image_url, cover_image_path, an image
+    with the same file name next to the video, or else the frame at
+    cover_second, which is extracted with ffmpeg.
     """
     sources = [s for s in (copy_from_ad_id, pin_id, video_path, image_path, image_url) if s]
     if len(sources) != 1:
@@ -1035,10 +1084,7 @@ def pinterest_launch_ad(
                     "source_type": "video_id",
                     "media_id": media["media_id"],
                 }
-                if cover_image_url:
-                    media_source["cover_image_url"] = cover_image_url
-                else:
-                    media_source["cover_image_key_frame_time"] = max(0, cover_second)
+                media_source.update(_video_cover(local, cover_image_url, cover_image_path, cover_second))
             elif image_path:
                 suffix = local.suffix.lower()
                 if suffix not in (".jpg", ".jpeg", ".png"):
@@ -1062,6 +1108,14 @@ def pinterest_launch_ad(
                 body=pin_body,
             )
         except PinterestError as exc:
+            if "allow you to save pins" in json.dumps(exc.payload).lower():
+                # Seen live: this is what Pinterest answers when a video Pin's
+                # cover is unusable, not only when a site blocks Pins.
+                raise ValueError(
+                    f"Pinterest refused the Pin ({exc.payload.get('message') if isinstance(exc.payload, dict) else exc.payload}). "
+                    "For a video this usually means the cover image was not accepted: pass "
+                    "cover_image_url or put an image with the same file name beside the video."
+                ) from None
             if _missing_scope(exc):
                 raise ValueError(
                     "Creating a Pin from new creative needs the pins:write and "
@@ -1085,8 +1139,17 @@ def pinterest_launch_ad(
     if call_to_action:
         ad_body["customizable_cta_type"] = call_to_action
     try:
-        result = api.request("POST", COLLECTION["ad"], body=[ad_body])
-        _check_exceptions(result)
+        # A Pin made from a just-uploaded video is not usable in an ad until
+        # Pinterest finishes transcoding it; the API says to wait and retry.
+        for wait in (*TRANSCODE_WAITS, None):
+            try:
+                result = api.request("POST", COLLECTION["ad"], body=[ad_body])
+                _check_exceptions(result)
+                break
+            except (PinterestError, ValueError) as exc:
+                if wait is None or "transcoded" not in str(exc).lower():
+                    raise
+                _sleep(wait)
     except (PinterestError, ValueError) as exc:
         if created_pin:
             raise ValueError(
@@ -1506,10 +1569,17 @@ def scan_folder(folder: Path) -> list[dict]:
     manifest = _read_manifest(folder)
     sheet = _read_copy_sheet(folder)
     found = []
-    for path in sorted(folder.iterdir(), key=lambda p: p.name.lower()):
+    entries = [p for p in sorted(folder.iterdir(), key=lambda p: p.name.lower())
+               if p.is_file() and not p.name.startswith(".")]
+    video_stems = {p.stem for p in entries if p.suffix.lower() in VIDEO_TYPES}
+    covers = {p.stem: p.name for p in entries
+              if p.suffix.lower() in IMAGE_TYPES and p.stem in video_stems}
+    for path in entries:
         suffix = path.suffix.lower()
-        if not path.is_file() or path.name.startswith(".") or suffix not in VIDEO_TYPES | IMAGE_TYPES:
+        if suffix not in VIDEO_TYPES | IMAGE_TYPES:
             continue
+        if suffix in IMAGE_TYPES and path.stem in video_stems:
+            continue          # the cover of the video with the same name
         kind = "video" if suffix in VIDEO_TYPES else "image"
         size = path.stat().st_size
         item: dict[str, Any] = {
@@ -1524,6 +1594,10 @@ def scan_folder(folder: Path) -> list[dict]:
                 problems.append("Image is over 20 MB.")
         else:
             item.update(video_info(path))
+            item["cover"] = covers.get(path.stem) or (
+                f"frame at {1}s (taken automatically)" if shutil.which("ffmpeg") else None)
+            if not item["cover"]:
+                problems.append(f"Needs a cover image: add '{path.stem}.jpg' beside it, or install ffmpeg.")
             if size > MAX_VIDEO_BYTES:
                 problems.append("Video is over 2 GB.")
             duration = item.get("duration_seconds")
@@ -1556,7 +1630,9 @@ def pinterest_scan_folder(folder: str) -> str:
 
     The first step for "launch the ads in this folder". Lists every video
     (.mp4, .mov, .m4v) and image (.jpg, .png) with its size, dimensions, aspect
-    ratio and length, flags files Pinterest will reject, and shows which files
+    ratio and length, flags files Pinterest will reject, shows each video's
+    cover (an image with the same file name is used as the cover, otherwise a
+    frame is taken from the video), and shows which files
     were already launched from this folder so they are not duplicated. If the
     folder has an ads.csv (columns: file, name, title, description, url) its
     copy is shown per file.
@@ -1792,7 +1868,8 @@ def pinterest_launch_folder(
             "results": results,
             "next": (f"{len(failed)} file(s) failed; fix the cause and run the same call again, "
                      "finished files are skipped. " if failed else "")
-            + ("Ads are PAUSED and in Pinterest's review. Set them ACTIVE with pinterest_set_status "
+            + ("" if not made else
+               "Ads are PAUSED and in Pinterest's review. Set them ACTIVE with pinterest_set_status "
                "when the user is ready." if status == "PAUSED" else "Ads are in Pinterest's review."),
         },
         "launch",
