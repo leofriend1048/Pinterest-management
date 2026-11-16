@@ -14,7 +14,7 @@ It answers in dollars, ROAS and CPA, and changes nothing unless you ask.
 <img alt="MCP server" src="https://img.shields.io/badge/MCP-server-E60023?style=flat-square">
 <img alt="Works with Claude Code and Claude Desktop" src="https://img.shields.io/badge/Claude-Code%20%2B%20Desktop-111111?style=flat-square">
 <img alt="Pinterest API v5, 266 endpoints" src="https://img.shields.io/badge/Pinterest%20API%20v5-266%20endpoints-E60023?style=flat-square">
-<img alt="91 tests passing" src="https://img.shields.io/badge/tests-91%20passing-2ea44f?style=flat-square">
+<img alt="100 tests passing" src="https://img.shields.io/badge/tests-100%20passing-2ea44f?style=flat-square">
 <img alt="macOS and Linux" src="https://img.shields.io/badge/macOS%20%7C%20Linux-supported-555555?style=flat-square">
 <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-555555?style=flat-square">
 </p>
@@ -23,6 +23,7 @@ It answers in dollars, ROAS and CPA, and changes nothing unless you ask.
 <a href="#install"><b>Install</b></a> ·
 <a href="#what-you-can-ask"><b>What you can ask</b></a> ·
 <a href="#for-teams"><b>For teams</b></a> ·
+<a href="#launch-ads-from-a-folder"><b>Launch from a folder</b></a> ·
 <a href="#reports-and-visuals"><b>Reports</b></a> ·
 <a href="#works-with-northbeam"><b>Northbeam</b></a> ·
 <a href="#playbooks"><b>Playbooks</b></a> ·
@@ -43,7 +44,7 @@ It answers in dollars, ROAS and CPA, and changes nothing unless you ask.
 Paste this into Terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/leofriend1048/Pinterest-management-/mcp-server/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/leofriend1048/Pinterest-management/mcp-server/install.sh | sh
 ```
 
 That installs the `pinterest-ads-mcp` command and walks you through setup: sign
@@ -57,7 +58,7 @@ restarts the desktop app for you so it loads the tools. Then ask it something.
 > [!TIP]
 > Got a **setup code** from a teammate? Add it and you skip straight to signing in:
 > ```sh
-> curl -fsSL https://raw.githubusercontent.com/leofriend1048/Pinterest-management-/mcp-server/install.sh | sh -s -- --code pam1_...
+> curl -fsSL https://raw.githubusercontent.com/leofriend1048/Pinterest-management/mcp-server/install.sh | sh -s -- --code pam1_...
 > ```
 
 <details>
@@ -83,8 +84,8 @@ Nothing else is required.
 <br>
 
 ```sh
-git clone https://github.com/leofriend1048/Pinterest-management-.git
-cd Pinterest-management-
+git clone https://github.com/leofriend1048/Pinterest-management.git
+cd Pinterest-management
 uv sync
 uv run pinterest-ads-mcp setup
 ```
@@ -102,7 +103,8 @@ Should I scale Prospecting, or is it too early?
 Pause the three worst ads in "Best Sellers Video".
 Scale the Prospecting campaign 20%.
 Put that winner in the Broad US ad set too.
-Launch ~/Desktop/hook-v3.mp4 in Broad US, paused, with our usual landing page.
+Launch everything in ~/Desktop/new-hooks into Broad US, paused, with our usual landing page.
+Make a new ad set like Broad US called "W10 hooks" and put the folder in that instead.
 Is ad A really beating ad B, or is that noise?
 Make me a report for the last two weeks I can send to the team.
 ```
@@ -121,7 +123,7 @@ sits between the two.
 | "Show me that ad" | The copy, landing page, a preview link, and the creative itself so Claude can see it |
 | "Turn off that ad set" | Pauses the ad group and reports the status before and after |
 | "Scale it 20%" | Reads the current daily budget and sets the new one in dollars |
-| "Launch this video in that ad set" | Uploads the file, creates the Pin, creates the ad paused |
+| "Launch the ads in this folder" | Reads the folder, shows you the plan, then uploads each file, creates the Pins and creates the ads paused |
 | "Is A really better than B?" | Runs a significance test on click-through and conversion rate, and says when there is too little data |
 | "Make me a report" | Builds an interactive dashboard with its own analysis written in |
 | "Is that good?" | Judges it against *your* target, from your saved account notes |
@@ -198,6 +200,31 @@ conventions, your default landing page with tracking parameters, and any rules
 you can tell Claude to "update my Pinterest account context" any time.
 
 This is what turns "is this ad good?" into an answer about your business.
+
+## Launch ads from a folder
+
+Point it at a folder of videos and images and say what you want:
+
+```text
+Launch everything in ~/Desktop/new-hooks into the Broad US ad set.
+Name them "W10 | <file name>", use our standard landing page,
+and write a title for each from the file name.
+```
+
+1. **It looks first.** Every file is listed with its size, shape and length, and
+   anything Pinterest would reject is flagged.
+2. **It shows you the plan.** A table of every ad it will create: name, title,
+   landing page, ad set. Nothing exists on Pinterest yet.
+3. **You approve, it builds.** Each file is uploaded, turned into a Pin, and
+   promoted as a **paused** ad. One Pin is shared across every ad set you name.
+
+It is safe to run twice. The folder remembers what was launched, so a run that
+stopped halfway picks up where it left off and nothing is duplicated. Drop an
+optional `ads.csv` in the folder (`file, name, title, description, url`) if you
+would rather write the copy in a spreadsheet.
+
+Need a fresh ad set for the batch? "Make a new ad set like Broad US" copies the
+targeting, bidding and optimisation of an existing one.
 
 ## Reports and visuals
 
@@ -285,7 +312,10 @@ to match how your team buys.
 | `pinterest_compare` | Test whether one ad, ad group or campaign really beats another |
 | `pinterest_find` | Look up campaigns, ad groups and ads by name |
 | `pinterest_creative` | See an ad: copy, landing page, preview link and the image or video cover |
-| `pinterest_launch_ad` | Create an ad from an existing ad, a Pin, or a local video or image |
+| `pinterest_scan_folder` | See what is in a folder of creatives and what Pinterest would reject |
+| `pinterest_launch_folder` | Turn a folder of videos and images into paused ads, plan first |
+| `pinterest_duplicate_ad_group` | A new ad set with the same settings as an existing one |
+| `pinterest_launch_ad` | Create one ad from an existing ad, a Pin, or a local video or image |
 | `pinterest_set_status` | Pause, resume or archive |
 | `pinterest_set_daily_budget` | Change a daily budget, in dollars |
 | `pinterest_account_context` | Your saved targets, conventions and rules |
@@ -323,7 +353,7 @@ Type <kbd>/</kbd> in Claude Code to find them.
 | `daily_check` | Yesterday against the last 7 days and against target, with up to three recommended actions |
 | `creative_report` | Winners, losers and what each group has in common |
 | `budget_review` | A table of proposed budget moves with the evidence, applied only after you choose |
-| `launch_ads` | New creative into an existing ad set, paused until you approve |
+| `launch_ads` | A folder of creatives into an ad set, paused until you approve |
 
 </details>
 
@@ -366,11 +396,11 @@ Type <kbd>/</kbd> in Claude Code to find them.
 ## Development
 
 ```sh
-git clone https://github.com/leofriend1048/Pinterest-management-.git
-cd Pinterest-management- && uv sync
+git clone https://github.com/leofriend1048/Pinterest-management.git
+cd Pinterest-management && uv sync
 
 uv run pinterest-ads-mcp setup            # registers this checkout with Claude
-uv run pytest                             # 91 tests, no network
+uv run pytest                             # 100 tests, no network
 uv run python scripts/update_spec.py      # pull Pinterest's latest API description
 uv run python scripts/render_screens.py   # regenerate the README screenshots
 ```

@@ -1,6 +1,6 @@
 [project]
 name = "pinterest-ads-mcp"
-version = "0.2.0"
+version = "0.3.0"
 description = "Run your Pinterest ad account by talking to Claude. An MCP server for media buyers."
 readme = "README.md"
 license = "MIT"

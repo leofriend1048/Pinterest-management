@@ -235,7 +235,11 @@ class CreativePinterest(FakePinterest):
                      "campaign_id": "1"}]
         self.created_ads = []
         self.created_pins = []
+        self.created_groups = []
         self.ad_response = None
+        self.groups = ["10"]
+        self.group_extra = {}
+        self.fail_ad_named = None
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path, method = request.url.path, request.method
@@ -247,14 +251,23 @@ class CreativePinterest(FakePinterest):
         if path.endswith("/ads"):
             if method == "POST":
                 body = json.loads(request.content)
+                if self.fail_ad_named and body[0].get("name") == self.fail_ad_named:
+                    return httpx.Response(200, json={"items": [{"data": None, "exceptions": [{"message": "rejected"}]}]})
                 self.created_ads.append(body)
                 return httpx.Response(200, json=self.ad_response or {"items": [
                     {"data": {**body[0], "id": "777", "review_status": "PENDING"}, "exceptions": []}]})
             wanted = (request.url.params.get("ad_ids") or "").split(",")
             return httpx.Response(200, json={"items": [a for a in self.ads if a["id"] in wanted]})
         if path.endswith("/ad_groups"):
-            wanted = (request.url.params.get("ad_group_ids") or "10").split(",")
-            groups = [{"id": "10", "name": "Broad US", "status": "ACTIVE", "campaign_id": "1"}]
+            if method == "POST":
+                body = json.loads(request.content)
+                self.created_groups.append(body)
+                return httpx.Response(200, json={"items": [{"data": {**body[0], "id": "88"}, "exceptions": []}]})
+            # List filters may arrive comma-joined or as repeated parameters.
+            wanted = [i for chunk in request.url.params.get_list("ad_group_ids") or ["10"]
+                      for i in chunk.split(",")]
+            groups = [{"id": g, "name": "Broad US", "status": "ACTIVE", "campaign_id": "1", **self.group_extra}
+                      for g in self.groups]
             return httpx.Response(200, json={"items": [g for g in groups if g["id"] in wanted]})
         if path.endswith("/ad_previews"):
             return httpx.Response(200, json={"url": "https://ads.pinterest.com/ad-preview/x/"})
@@ -267,7 +280,7 @@ class CreativePinterest(FakePinterest):
             return httpx.Response(200, json={"status": "succeeded"})
         if path.endswith("/pins"):
             self.created_pins.append(json.loads(request.content))
-            return httpx.Response(201, json={"id": "901"})
+            return httpx.Response(201, json={"id": str(900 + len(self.created_pins))})
         if "/pins/" in path:
             if not self.pin_scope:
                 return denied
@@ -436,3 +449,145 @@ def test_dashboard_writes_one_self_contained_page(fake, tmp_path):
     assert [r["segment"] for r in data["age"]] == ["18-24", "35-44"]      # natural order
     # Names from the account can never break out of the data block.
     assert "<script>alert(1)" not in page and "alert(1)" in page
+
+
+# ── launching from a folder ───────────────────────────────────────────────────
+
+PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + (1000).to_bytes(4, "big") + (1500).to_bytes(4, "big") + b"\x08\x02\x00\x00\x00"
+JPEG = (b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+        b"\xff\xc0\x00\x11\x08" + (1080).to_bytes(2, "big") + (1920).to_bytes(2, "big") + b"\x03\x01\x22\x00")
+
+
+@pytest.fixture
+def creatives(tmp_path):
+    folder = tmp_path / "new hooks"
+    folder.mkdir()
+    (folder / "hook-a.mp4").write_bytes(b"mp4-a")
+    (folder / "hook-b.mov").write_bytes(b"mov-b")
+    (folder / "static-1.png").write_bytes(PNG)
+    (folder / "notes.txt").write_text("not a creative")
+    (folder / ".DS_Store").write_bytes(b"x")
+    return folder
+
+
+def test_image_size_reads_png_and_jpeg_headers(tmp_path):
+    (tmp_path / "a.png").write_bytes(PNG)
+    (tmp_path / "b.jpg").write_bytes(JPEG)
+    (tmp_path / "c.png").write_bytes(b"nope")
+    assert buyer.image_size(tmp_path / "a.png") == (1000, 1500)
+    assert buyer.image_size(tmp_path / "b.jpg") == (1920, 1080)
+    assert buyer.image_size(tmp_path / "c.png") is None
+
+
+def test_scan_folder_lists_creatives_and_ignores_the_rest(creatives, monkeypatch):
+    monkeypatch.setattr(buyer.shutil, "which", lambda _: None)      # no ffprobe
+    (creatives / "ads.csv").write_text("file,name,title,url\nhook-a.mp4,Hook A,Glow in 3 minutes,https://shop.example/a\n")
+    out = json.loads(buyer.pinterest_scan_folder(str(creatives)))
+    assert (out["creatives"], out["videos"], out["images"]) == (3, 2, 1)
+    assert out["ignored_files"] == ["notes.txt"] and out["copy_sheet"] == "ads.csv"
+    by_name = {f["file"]: f for f in out["files"]}
+    assert by_name["static-1.png"]["aspect_ratio"] == "2:3"
+    assert by_name["hook-a.mp4"]["copy_from_sheet"] == {
+        "name": "Hook A", "title": "Glow in 3 minutes", "destination_url": "https://shop.example/a"}
+    with pytest.raises(ValueError, match="Not a folder"):
+        buyer.pinterest_scan_folder(str(creatives / "missing"))
+
+
+def test_launch_folder_plans_first_and_creates_nothing(creatives, monkeypatch):
+    api = wire(monkeypatch, CreativePinterest())
+    out = json.loads(buyer.pinterest_launch_folder(
+        str(creatives), ["10"], destination_url="https://shop.example/lp", title="Try it",
+        ads=[{"file": "hook-a.mp4", "name": "Hook A | UGC", "title": "Glow in 3 minutes"}],
+        name_template="W10 | {stem}"))
+    assert out["created_anything"] is False and out["ads_to_create"] == 3 and out["new_pins"] == 3
+    names = {e["file"]: e["ad_name"] for e in out["plan"]}
+    assert names == {"hook-a.mp4": "Hook A | UGC", "hook-b.mov": "W10 | hook-b", "static-1.png": "W10 | static-1"}
+    assert out["plan"][0]["title"] == "Glow in 3 minutes" and out["plan"][1]["title"] == "Try it"
+    assert api.created_ads == [] and api.created_pins == []
+    assert not (creatives / ".pinterest-ads.json").exists()
+
+
+def test_launch_folder_creates_one_pin_per_file_and_an_ad_per_ad_group(creatives, monkeypatch):
+    api = wire(monkeypatch, CreativePinterest())
+    api.groups = ["10", "11"]
+    out = json.loads(buyer.pinterest_launch_folder(
+        str(creatives), ["10", "11"], destination_url="https://shop.example/lp", title="Try it",
+        confirm=True))
+    assert out["ads_created"] == 6 and out["files_failed"] == []
+    assert len(api.created_pins) == 3                       # one Pin per file, shared
+    ads = [a[0] for a in api.created_ads]
+    assert [a["status"] for a in ads] == ["PAUSED"] * 6
+    assert {(a["ad_group_id"], a["creative_type"]) for a in ads} == {
+        ("10", "VIDEO"), ("11", "VIDEO"), ("10", "REGULAR"), ("11", "REGULAR")}
+    manifest = json.loads((creatives / ".pinterest-ads.json").read_text())
+    assert set(manifest) == {"hook-a.mp4", "hook-b.mov", "static-1.png"}
+    assert set(manifest["hook-a.mp4"]["ads"]) == {"10", "11"}
+
+
+def test_launch_folder_is_safe_to_run_twice(creatives, monkeypatch):
+    api = wire(monkeypatch, CreativePinterest())
+    args = dict(destination_url="https://shop.example/lp", title="Try it", confirm=True)
+    buyer.pinterest_launch_folder(str(creatives), ["10"], **args)
+    with pytest.raises(ValueError, match="Nothing to create"):
+        buyer.pinterest_launch_folder(str(creatives), ["10"], **args)
+    assert len(api.created_ads) == 3 and len(api.created_pins) == 3
+    # A new ad group reuses the Pins instead of uploading again.
+    api.groups = ["10", "11"]
+    out = json.loads(buyer.pinterest_launch_folder(str(creatives), ["10", "11"], **args))
+    assert out["ads_created"] == 3 and len(api.created_pins) == 3
+    # A changed file is treated as new.
+    (creatives / "hook-a.mp4").write_bytes(b"a brand new edit of the video")
+    plan = json.loads(buyer.pinterest_launch_folder(str(creatives), ["10"], destination_url="https://s", title="T"))
+    assert plan["ads_to_create"] == 1 and plan["plan"][0]["reuse_pin_id"] is None
+
+
+def test_launch_folder_reports_problems_and_leaves_those_files_out(creatives, monkeypatch):
+    api = wire(monkeypatch, CreativePinterest())
+    out = json.loads(buyer.pinterest_launch_folder(
+        str(creatives), ["10"], destination_url="https://shop.example/lp",
+        ads=[{"file": "hook-a.mp4", "title": "x" * 101}, {"file": "hook-b.mov", "title": "Fine"}],
+        confirm=True))
+    assert sorted(out["files_with_problems"]) == ["hook-a.mp4", "static-1.png"]
+    assert out["ads_created"] == 1 and api.created_ads[0][0]["name"] == "hook-b"
+    errors = {r["file"]: r.get("error", "") for r in out["results"]}
+    assert "limit is 100" in errors["hook-a.mp4"] and "No title" in errors["static-1.png"]
+
+
+def test_launch_folder_validates_before_touching_anything(creatives, monkeypatch):
+    api = wire(monkeypatch, CreativePinterest())
+    with pytest.raises(ValueError, match="No ad group found"):
+        buyer.pinterest_launch_folder(str(creatives), ["404"], confirm=True)
+    with pytest.raises(ValueError, match="not in the folder"):
+        buyer.pinterest_launch_folder(str(creatives), ["10"], ads=[{"file": "ghost.mp4"}], confirm=True)
+    with pytest.raises(ValueError, match="Not in the folder"):
+        buyer.pinterest_launch_folder(str(creatives), ["10"], only_files=["ghost.mp4"], confirm=True)
+    assert api.created_ads == [] and api.created_pins == []
+
+
+def test_launch_folder_continues_after_one_file_fails_and_can_resume(creatives, monkeypatch):
+    api = wire(monkeypatch, CreativePinterest())
+    api.fail_ad_named = "hook-b"
+    args = dict(destination_url="https://shop.example/lp", title="Try it", confirm=True)
+    out = json.loads(buyer.pinterest_launch_folder(str(creatives), ["10"], **args))
+    assert out["ads_created"] == 2 and out["files_failed"] == ["hook-b.mov"]
+    api.fail_ad_named = None
+    again = json.loads(buyer.pinterest_launch_folder(str(creatives), ["10"], **args))
+    assert again["ads_created"] == 1
+    assert len(api.created_pins) == 3              # the orphaned Pin was reused, not re-uploaded
+
+
+def test_duplicate_ad_group_copies_settings_into_a_paused_copy(monkeypatch):
+    api = wire(monkeypatch, CreativePinterest())
+    api.group_extra = {"billable_event": "IMPRESSION", "bid_strategy_type": "AUTOMATIC_BID",
+                       "targeting_spec": {"GEO": ["US"]}, "budget_type": "CBO_ADGROUP",
+                       "budget_in_micro_currency": None, "created_time": 1, "summary_status": "RUNNING"}
+    out = json.loads(buyer.pinterest_duplicate_ad_group("10", "W10 | New hooks"))
+    body = api.created_groups[0][0]
+    assert body["name"] == "W10 | New hooks" and body["status"] == "PAUSED" and body["campaign_id"] == "1"
+    assert body["targeting_spec"] == {"GEO": ["US"]} and body["billable_event"] == "IMPRESSION"
+    assert "created_time" not in body and "summary_status" not in body and "id" not in body
+    assert out["ad_group_id"] == "88" and out["copied_from"]["name"] == "Broad US"
+
+    buyer.pinterest_duplicate_ad_group("10", "With budget", daily_budget_usd=250)
+    assert api.created_groups[1][0]["budget_in_micro_currency"] == 250_000_000
+    assert api.created_groups[1][0]["budget_type"] == "DAILY"

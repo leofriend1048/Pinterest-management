@@ -34,6 +34,10 @@ Pick the tool by what was asked
 - "Show me that ad / what does the creative look like" -> pinterest_creative
 - "Launch this video / put that winner in ad set X / duplicate the ad"
                                                 -> pinterest_launch_ad
+- "Launch the ads in this folder / build ads from ~/Desktop/..."
+      -> pinterest_scan_folder, then pinterest_launch_folder (plan first,
+         confirm=true only after the user approves the plan)
+- "Make a new ad set like X"                    -> pinterest_duplicate_ad_group
 - "Should I scale / cut / pause this? Is it fatigued? Why did ROAS drop? What
   should we test?"                 -> pinterest_playbook first, then the numbers
 - Anything else (build campaigns, audiences, keywords, targeting, pins,

@@ -8,9 +8,13 @@ days", dollars per day.
 
 from __future__ import annotations
 
+import csv
 import functools
 import json
 import math
+import re
+import shutil
+import subprocess
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
@@ -800,21 +804,22 @@ def budget_review() -> str:
 
 
 @mcp.prompt(title="Launch ads")
-def launch_ads(creative: str = "", ad_group: str = "") -> str:
-    """Put new creative live in an existing ad group, paused until approved."""
+def launch_ads(folder: str = "", ad_group: str = "") -> str:
+    """Turn a folder of creatives into ads, paused until approved."""
     return (
-        f"Launch new ads in the Pinterest ad account. Creative: {creative or '(ask)'}. "
+        f"Launch new ads in the Pinterest ad account. Folder: {folder or '(ask)'}. "
         f"Destination ad group: {ad_group or '(ask)'}.\n"
         "1. pinterest_account_context for the landing page, tracking parameters, CTA "
         "and naming convention.\n"
-        "2. pinterest_find to resolve the ad group. If the creative is an existing ad "
-        "or winner, find its ad id too.\n"
-        "3. Show the user exactly what you will create: name, creative, destination "
-        "URL with tracking parameters, ad group.\n"
-        "4. After they approve, call pinterest_launch_ad once per ad (copy_from_ad_id "
-        "for an existing ad, video_path or image_path for a new file). Leave status "
-        "as PAUSED.\n"
-        "5. Report the new ad ids and ask whether to set them ACTIVE."
+        "2. pinterest_scan_folder to see what is there and flag anything Pinterest will "
+        "reject.\n"
+        "3. pinterest_find to resolve the ad group. If the user wants a new ad set, "
+        "pinterest_duplicate_ad_group from the one they name.\n"
+        "4. Work out each ad's name, title and description from what the user asked for "
+        "and the naming convention. Call pinterest_launch_folder WITHOUT confirm and show "
+        "the plan as a table: file, ad name, title, destination, ad group.\n"
+        "5. After they approve, call it again with confirm=true. Leave status as PAUSED.\n"
+        "6. Report what was created and what failed, and ask whether to set the ads ACTIVE."
     )
 
 
@@ -966,6 +971,7 @@ def pinterest_launch_ad(
     cover_second: int = 1,
     call_to_action: str | None = None,
     status: Literal["PAUSED", "ACTIVE"] = "PAUSED",
+    creative_type: str | None = None,
 ) -> str:
     """Create an ad in an ad group (ad set), from an existing ad or new creative.
 
@@ -977,7 +983,8 @@ def pinterest_launch_ad(
     - copy_from_ad_id: duplicate an existing ad into this ad group. Its Pin,
       format, destination URL and call to action are reused unless overridden.
       The usual way to move a winner into another ad set.
-    - pin_id: promote an existing Pin. Needs destination_url.
+    - pin_id: promote an existing Pin. Needs destination_url, and
+      creative_type="VIDEO" when the Pin is a video.
     - video_path / image_path: a local file. It is uploaded, turned into a Pin
       and promoted. Needs destination_url and title.
     - image_url: a hosted image. Needs destination_url and title.
@@ -997,7 +1004,7 @@ def pinterest_launch_ad(
     if not group:
         raise ValueError(f"No ad group found with id {ad_group_id}")
 
-    creative_type = "REGULAR"
+    creative_type = creative_type or "REGULAR"
     created_pin = False
     if copy_from_ad_id:
         source = _fetch("ad", [str(copy_from_ad_id)]).get(str(copy_from_ad_id))
@@ -1405,4 +1412,442 @@ def performance_report(date_range: str = "last_14_days") -> str:
         "headline and insights, and northbeam_campaigns if you have them.\n"
         "5. Tell the user where the report is, repeat the headline and the top "
         "recommendation, and ask what to act on. Do not change anything."
+    )
+
+
+# ── launching from a folder ───────────────────────────────────────────────────
+
+VIDEO_TYPES = {".mp4", ".mov", ".m4v"}
+IMAGE_TYPES = {".jpg", ".jpeg", ".png"}
+MANIFEST = ".pinterest-ads.json"
+COPY_SHEET = "ads.csv"
+MAX_TITLE, MAX_DESCRIPTION = 100, 800
+MAX_IMAGE_BYTES, MAX_VIDEO_BYTES = 20 * 1024 * 1024, 2 * 1024 * 1024 * 1024
+
+
+def image_size(path: Path) -> tuple[int, int] | None:
+    """Width and height of a PNG or JPEG, read from the file header."""
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(26)
+            if head[:8] == b"\x89PNG\r\n\x1a\n":
+                return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
+            if head[:2] != b"\xff\xd8":
+                return None
+            fh.seek(2)
+            while True:
+                marker = fh.read(4)
+                if len(marker) < 4 or marker[0] != 0xFF:
+                    return None
+                length = int.from_bytes(marker[2:4], "big")
+                # Start-of-frame markers carry the dimensions.
+                if 0xC0 <= marker[1] <= 0xCF and marker[1] not in (0xC4, 0xC8, 0xCC):
+                    frame = fh.read(5)
+                    return int.from_bytes(frame[3:5], "big"), int.from_bytes(frame[1:3], "big")
+                fh.seek(length - 2, 1)
+    except OSError:
+        return None
+
+
+def video_info(path: Path) -> dict:
+    """Duration and size from ffprobe when it is installed; empty otherwise."""
+    probe = shutil.which("ffprobe")
+    if not probe:
+        return {}
+    try:
+        done = subprocess.run(
+            [probe, "-v", "error", "-select_streams", "v:0", "-show_entries",
+             "stream=width,height:format=duration", "-of", "json", str(path)],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30,
+        )
+        data = json.loads(done.stdout or "{}")
+        stream = (data.get("streams") or [{}])[0]
+        out: dict[str, Any] = {}
+        if stream.get("width"):
+            out["width"], out["height"] = stream["width"], stream["height"]
+        if data.get("format", {}).get("duration"):
+            out["duration_seconds"] = round(float(data["format"]["duration"]), 1)
+        return out
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return {}
+
+
+def _fingerprint(path: Path) -> str:
+    stat = path.stat()
+    return f"{stat.st_size}-{int(stat.st_mtime)}"
+
+
+def _read_manifest(folder: Path) -> dict:
+    try:
+        return json.loads((folder / MANIFEST).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _read_copy_sheet(folder: Path) -> dict[str, dict]:
+    """Optional ads.csv in the folder: file, name, title, description, url."""
+    sheet = folder / COPY_SHEET
+    if not sheet.is_file():
+        return {}
+    rows: dict[str, dict] = {}
+    with sheet.open(newline="", encoding="utf-8-sig") as fh:
+        for row in csv.DictReader(fh):
+            clean = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
+            if clean.get("file"):
+                rows[clean["file"]] = {
+                    "name": clean.get("name"), "title": clean.get("title"),
+                    "description": clean.get("description"),
+                    "destination_url": clean.get("url") or clean.get("destination_url"),
+                }
+    return rows
+
+
+def scan_folder(folder: Path) -> list[dict]:
+    manifest = _read_manifest(folder)
+    sheet = _read_copy_sheet(folder)
+    found = []
+    for path in sorted(folder.iterdir(), key=lambda p: p.name.lower()):
+        suffix = path.suffix.lower()
+        if not path.is_file() or path.name.startswith(".") or suffix not in VIDEO_TYPES | IMAGE_TYPES:
+            continue
+        kind = "video" if suffix in VIDEO_TYPES else "image"
+        size = path.stat().st_size
+        item: dict[str, Any] = {
+            "file": path.name, "type": kind, "size_mb": round(size / 1_048_576, 1),
+        }
+        problems, notes = [], []
+        if kind == "image":
+            dims = image_size(path)
+            if dims:
+                item["width"], item["height"] = dims
+            if size > MAX_IMAGE_BYTES:
+                problems.append("Image is over 20 MB.")
+        else:
+            item.update(video_info(path))
+            if size > MAX_VIDEO_BYTES:
+                problems.append("Video is over 2 GB.")
+            duration = item.get("duration_seconds")
+            if duration is not None and not 4 <= duration <= 900:
+                problems.append("Pinterest video ads must be 4 seconds to 15 minutes long.")
+        if item.get("width") and item.get("height"):
+            ratio = item["width"] / item["height"]
+            item["aspect_ratio"] = "9:16" if abs(ratio - 9 / 16) < 0.02 else (
+                "2:3" if abs(ratio - 2 / 3) < 0.02 else ("1:1" if abs(ratio - 1) < 0.02 else f"{ratio:.2f}:1"))
+            if ratio > 1.05:
+                notes.append("Landscape. Pinterest favours vertical (2:3 or 9:16).")
+        if path.name in sheet:
+            item["copy_from_sheet"] = {k: v for k, v in sheet[path.name].items() if v}
+        done = manifest.get(path.name)
+        if done and done.get("fingerprint") == _fingerprint(path):
+            item["already_launched"] = {"pin_id": done.get("pin_id"), "ads": done.get("ads", {})}
+        elif done:
+            notes.append("File changed since it was last launched; it will be uploaded again.")
+        if problems:
+            item["problems"] = problems
+        if notes:
+            item["notes"] = notes
+        found.append(item)
+    return found
+
+
+@mcp.tool(annotations=LOCAL)
+def pinterest_scan_folder(folder: str) -> str:
+    """Look at a folder of creatives before launching them. Changes nothing.
+
+    The first step for "launch the ads in this folder". Lists every video
+    (.mp4, .mov, .m4v) and image (.jpg, .png) with its size, dimensions, aspect
+    ratio and length, flags files Pinterest will reject, and shows which files
+    were already launched from this folder so they are not duplicated. If the
+    folder has an ads.csv (columns: file, name, title, description, url) its
+    copy is shown per file.
+
+    Use the result to plan names, titles and descriptions with the user, then
+    call pinterest_launch_folder.
+    """
+    path = Path(folder).expanduser()
+    if not path.is_dir():
+        raise ValueError(f"Not a folder: {path}")
+    items = scan_folder(path)
+    skipped = sorted(
+        p.name for p in path.iterdir()
+        if p.is_file() and not p.name.startswith(".") and p.name != COPY_SHEET
+        and p.suffix.lower() not in VIDEO_TYPES | IMAGE_TYPES
+    )
+    return _render(
+        {
+            "folder": str(path),
+            "creatives": len(items),
+            "videos": sum(1 for i in items if i["type"] == "video"),
+            "images": sum(1 for i in items if i["type"] == "image"),
+            "with_problems": sum(1 for i in items if i.get("problems")),
+            "already_launched": sum(1 for i in items if i.get("already_launched")),
+            "copy_sheet": COPY_SHEET if (path / COPY_SHEET).is_file() else None,
+            "ignored_files": skipped[:30],
+            "files": items,
+        },
+        "folder",
+    )
+
+
+@mcp.tool(annotations=WRITE)
+@_wrap
+def pinterest_launch_folder(
+    folder: str,
+    ad_group_ids: list[str],
+    destination_url: str | None = None,
+    title: str | None = None,
+    description: str | None = None,
+    ads: list[dict[str, Any]] | None = None,
+    name_template: str = "{stem}",
+    only_files: list[str] | None = None,
+    board_id: str | None = None,
+    call_to_action: str | None = None,
+    cover_second: int = 1,
+    status: Literal["PAUSED", "ACTIVE"] = "PAUSED",
+    relaunch: bool = False,
+    confirm: bool = False,
+) -> str:
+    """Turn a folder of videos and images into Pinterest ads.
+
+    The tool for "launch everything in ~/Desktop/new-hooks into the Broad ad
+    set". Each file is uploaded, made into a Pin and promoted as an ad in every
+    ad group listed. One Pin per file is shared across the ad groups.
+
+    Without confirm=true NOTHING is created: you get the exact plan (every ad
+    name, title, destination and ad group) to show the user. Call again with
+    confirm=true only after they approve it. LIVE change; ads are created
+    PAUSED unless status="ACTIVE".
+
+    How each ad's copy is chosen, most specific first:
+    1. `ads`: per-file settings you write from what the user asked for, e.g.
+       [{"file": "hook-a.mp4", "name": "Hook A | UGC", "title": "...",
+         "description": "...", "destination_url": "..."}]
+    2. ads.csv in the folder (columns: file, name, title, description, url)
+    3. the `title`, `description` and `destination_url` given here for all files
+    4. the ad name defaults to name_template: {stem} is the file name without
+       its extension, {n} a running number, {date} today.
+
+    destination_url should include the account's tracking parameters (see
+    pinterest_account_context). Titles are limited to 100 characters and
+    descriptions to 800. only_files limits the run to some files.
+
+    Safe to run again: files already launched from this folder are remembered
+    (in .pinterest-ads.json there) and skipped, so a run that failed halfway
+    can simply be repeated. Pass relaunch=true to create them again anyway.
+    """
+    path = Path(folder).expanduser()
+    if not path.is_dir():
+        raise ValueError(f"Not a folder: {path}")
+    ad_group_ids = [str(i) for i in ad_group_ids]
+    if not ad_group_ids:
+        raise ValueError("Pass at least one ad group id (pinterest_find gives them).")
+    groups = _fetch("ad_group", ad_group_ids)
+    missing = [i for i in ad_group_ids if i not in groups]
+    if missing:
+        raise ValueError(f"No ad group found with id(s): {', '.join(missing)}")
+
+    files = scan_folder(path)
+    if only_files:
+        wanted = set(only_files)
+        unknown = wanted - {f["file"] for f in files}
+        if unknown:
+            raise ValueError(f"Not in the folder: {', '.join(sorted(unknown))}")
+        files = [f for f in files if f["file"] in wanted]
+    if not files:
+        raise ValueError(f"No videos or images to launch in {path}")
+    overrides = {str(a.get("file")): a for a in (ads or []) if a.get("file")}
+    stray = set(overrides) - {f["file"] for f in files}
+    if stray:
+        raise ValueError(f"`ads` names files that are not in the folder: {', '.join(sorted(stray))}")
+
+    manifest = _read_manifest(path)
+    today = date.today().isoformat()
+    plan, blocked = [], []
+    for number, item in enumerate(files, 1):
+        name = item["file"]
+        stem = Path(name).stem
+        specific = overrides.get(name, {})
+        sheet = item.get("copy_from_sheet", {})
+
+        def pick(key: str, default: str | None = None) -> str | None:
+            return specific.get(key) or sheet.get(key) or default
+
+        entry = {
+            "file": name,
+            "type": item["type"],
+            "ad_name": pick("name") or name_template.format(stem=stem, n=number, date=today),
+            "title": pick("title", title),
+            "description": pick("description", description) or "",
+            "destination_url": pick("destination_url", destination_url),
+        }
+        problems = list(item.get("problems", []))
+        if not entry["title"]:
+            problems.append("No title.")
+        elif len(entry["title"]) > MAX_TITLE:
+            problems.append(f"Title is {len(entry['title'])} characters; the limit is {MAX_TITLE}.")
+        if len(entry["description"]) > MAX_DESCRIPTION:
+            problems.append(f"Description is {len(entry['description'])} characters; the limit is {MAX_DESCRIPTION}.")
+        if not entry["destination_url"]:
+            problems.append("No destination URL.")
+        elif not str(entry["destination_url"]).startswith(("http://", "https://")):
+            problems.append("Destination URL must start with http:// or https://.")
+
+        previous = manifest.get(name) if not relaunch else None
+        if previous and previous.get("fingerprint") != _fingerprint(path / name):
+            previous = None
+        entry["reuse_pin_id"] = (previous or {}).get("pin_id")
+        done_groups = set((previous or {}).get("ads", {}))
+        entry["ad_groups"] = [g for g in ad_group_ids if g not in done_groups]
+        entry["skipped_ad_groups"] = [g for g in ad_group_ids if g in done_groups]
+        if problems:
+            entry["problems"] = problems
+            blocked.append(name)
+        plan.append(entry)
+
+    to_create = sum(len(e["ad_groups"]) for e in plan if not e.get("problems"))
+    summary = {
+        "folder": str(path),
+        "ad_groups": [{"id": i, "name": groups[i].get("name")} for i in ad_group_ids],
+        "status_on_creation": status,
+        "ads_to_create": to_create,
+        "new_pins": sum(1 for e in plan if not e.get("problems") and e["ad_groups"] and not e["reuse_pin_id"]),
+        "files_with_problems": blocked,
+        "already_done": sum(len(e["skipped_ad_groups"]) for e in plan),
+    }
+    if not confirm:
+        return _render(
+            {
+                **summary,
+                "created_anything": False,
+                "plan": plan,
+                "next": "Show the user this plan. "
+                + ("Fix the files with problems or they will be left out. " if blocked else "")
+                + "After they approve, call again with the same arguments and confirm=true.",
+            },
+            "launch-plan",
+        )
+    if to_create == 0:
+        raise ValueError(
+            "Nothing to create: every file is already launched in these ad groups or has a "
+            "problem. Pass relaunch=true to create them again."
+        )
+
+    board = None
+    results = []
+    for entry in plan:
+        if entry.get("problems") or not entry["ad_groups"]:
+            if entry.get("problems"):
+                results.append({"file": entry["file"], "created": [], "error": "; ".join(entry["problems"])})
+            continue
+        source = path / entry["file"]
+        record = manifest.get(entry["file"]) if not relaunch else None
+        if not record or record.get("fingerprint") != _fingerprint(source):
+            record = {"fingerprint": _fingerprint(source), "ads": {}}
+        pin_id = entry["reuse_pin_id"]
+        creative_type = record.get("creative_type") or ("VIDEO" if entry["type"] == "video" else "REGULAR")
+        created, error = [], None
+        for group_id in entry["ad_groups"]:
+            common = {
+                "ad_group_id": group_id, "name": entry["ad_name"],
+                "destination_url": entry["destination_url"],
+                "call_to_action": call_to_action, "status": status,
+            }
+            try:
+                if pin_id:
+                    out = json.loads(pinterest_launch_ad(pin_id=pin_id, creative_type=creative_type, **common))
+                else:
+                    if board is None:
+                        board = _pick_board(board_id)
+                    kind = "video_path" if entry["type"] == "video" else "image_path"
+                    out = json.loads(pinterest_launch_ad(
+                        **{kind: str(source)}, title=entry["title"], description=entry["description"],
+                        board_id=board, cover_second=cover_second, **common))
+                    pin_id = out["pin_id"]
+            except (ValueError, PinterestError) as exc:
+                error = str(exc)
+                recovered = re.search(r"pin_id (\d+)", error)
+                if recovered and not pin_id:
+                    pin_id = recovered.group(1)      # the Pin exists; keep it for the retry
+                break
+            created.append({"ad_group_id": group_id, "ad_id": out.get("ad_id"), "status": out.get("status")})
+            record["ads"][group_id] = out.get("ad_id")
+        if pin_id:
+            record.update(pin_id=pin_id, creative_type=creative_type, launched_at=today)
+            manifest[entry["file"]] = record
+            # Saved after every file so an interrupted run can be resumed.
+            (path / MANIFEST).write_text(json.dumps(manifest, indent=2))
+        result = {"file": entry["file"], "ad_name": entry["ad_name"], "pin_id": pin_id, "created": created}
+        if error:
+            result["error"] = error
+        results.append(result)
+
+    made = sum(len(r["created"]) for r in results)
+    failed = [r["file"] for r in results if r.get("error")]
+    return _render(
+        {
+            **summary,
+            "created_anything": made > 0,
+            "ads_created": made,
+            "files_failed": failed,
+            "results": results,
+            "next": (f"{len(failed)} file(s) failed; fix the cause and run the same call again, "
+                     "finished files are skipped. " if failed else "")
+            + ("Ads are PAUSED and in Pinterest's review. Set them ACTIVE with pinterest_set_status "
+               "when the user is ready." if status == "PAUSED" else "Ads are in Pinterest's review."),
+        },
+        "launch",
+    )
+
+
+@mcp.tool(annotations=WRITE)
+@_wrap
+def pinterest_duplicate_ad_group(
+    source_ad_group_id: str,
+    name: str,
+    campaign_id: str | None = None,
+    daily_budget_usd: float | None = None,
+    status: Literal["PAUSED", "ACTIVE"] = "PAUSED",
+) -> str:
+    """Create a new ad group (ad set) with the same settings as an existing one.
+
+    The tool for "make a new ad set like Broad US for this batch". Copies the
+    source's targeting, bidding, optimisation goal, placement and budget type
+    into a new ad group with no ads in it, ready for pinterest_launch_folder
+    or pinterest_launch_ad. Created PAUSED unless status="ACTIVE". LIVE change.
+
+    campaign_id puts it in a different campaign (default: the same one).
+    daily_budget_usd sets its own daily budget in dollars when budgets live on
+    ad groups; leave it unset in a campaign-budget campaign.
+    """
+    source = _fetch("ad_group", [str(source_ad_group_id)]).get(str(source_ad_group_id))
+    if not source:
+        raise ValueError(f"No ad group found with id {source_ad_group_id}")
+    spec = client().spec
+    operation = spec.get("ad_groups/create")
+    schema = spec.describe(operation, 2)["request_body"]["schema"]
+    allowed = set((schema.get("items") or schema).get("properties", {}))
+    skip = {"name", "status", "start_time", "end_time", "campaign_id"}
+    body = {k: v for k, v in source.items() if k in allowed and k not in skip and v is not None}
+    body.update(name=name, status=status, campaign_id=str(campaign_id or source.get("campaign_id")))
+    if daily_budget_usd is not None:
+        if daily_budget_usd <= 0:
+            raise ValueError("daily_budget_usd must be a positive dollar amount.")
+        body["budget_in_micro_currency"] = int(round(daily_budget_usd * MICRO))
+        body["budget_type"] = "DAILY"
+    elif body.get("budget_type") == "CBO_ADGROUP":
+        body.pop("budget_in_micro_currency", None)
+    result = client().request("POST", COLLECTION["ad_group"], body=[body])
+    _check_exceptions(result)
+    created = ((result.get("items") or [{}])[0].get("data")) or {}
+    return json.dumps(
+        {
+            "ad_group_id": created.get("id"),
+            "name": created.get("name") or name,
+            "status": created.get("status") or status,
+            "campaign_id": body["campaign_id"],
+            "copied_from": {"id": str(source_ad_group_id), "name": source.get("name")},
+            "copied_settings": sorted(k for k in body if k not in ("name", "status", "campaign_id")),
+            "daily_budget": _usd(body.get("budget_in_micro_currency")),
+        },
+        indent=1,
     )

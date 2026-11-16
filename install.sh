@@ -1,7 +1,7 @@
 #!/bin/sh
 # Pinterest Ads MCP installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/leofriend1048/Pinterest-management-/mcp-server/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/leofriend1048/Pinterest-management/mcp-server/install.sh | sh
 #
 # With a team setup code:
 #
@@ -11,7 +11,7 @@
 # starts the guided setup. Safe to run again to update.
 set -eu
 
-REPO="${PINTEREST_ADS_MCP_REPO:-https://github.com/leofriend1048/Pinterest-management-}"
+REPO="${PINTEREST_ADS_MCP_REPO:-https://github.com/leofriend1048/Pinterest-management}"
 REF="${PINTEREST_ADS_MCP_REF:-mcp-server}"
 
 say()  { printf '  %s\n' "$1"; }

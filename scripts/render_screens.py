@@ -26,7 +26,7 @@ def setup_screen() -> Console:
     c = recorder(88)
     ob.banner(c)
     ob.step(c, 1, "Check your computer")
-    ob.ok(c, "Pinterest Ads MCP 0.2.0 installed.")
+    ob.ok(c, "Pinterest Ads MCP 0.3.0 installed.")
     ob.ok(c, "Claude Code found.")
     ob.ok(c, "Claude desktop app found.")
     ob.step(c, 2, "Connect Pinterest")

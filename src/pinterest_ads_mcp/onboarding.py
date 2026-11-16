@@ -573,7 +573,7 @@ def invite(include_context: bool = True, console: Console | None = None) -> int:
 
 
 INSTALL_COMMAND = (
-    "curl -fsSL https://raw.githubusercontent.com/leofriend1048/Pinterest-management-/"
+    "curl -fsSL https://raw.githubusercontent.com/leofriend1048/Pinterest-management/"
     "mcp-server/install.sh | sh"
 )
 
