@@ -14,7 +14,7 @@ It answers in dollars, ROAS and CPA, and changes nothing unless you ask.
 <img alt="MCP server" src="https://img.shields.io/badge/MCP-server-E60023?style=flat-square">
 <img alt="Works with Claude Code and Claude Desktop" src="https://img.shields.io/badge/Claude-Code%20%2B%20Desktop-111111?style=flat-square">
 <img alt="Pinterest API v5, 266 endpoints" src="https://img.shields.io/badge/Pinterest%20API%20v5-266%20endpoints-E60023?style=flat-square">
-<img alt="88 tests passing" src="https://img.shields.io/badge/tests-88%20passing-2ea44f?style=flat-square">
+<img alt="91 tests passing" src="https://img.shields.io/badge/tests-91%20passing-2ea44f?style=flat-square">
 <img alt="macOS and Linux" src="https://img.shields.io/badge/macOS%20%7C%20Linux-supported-555555?style=flat-square">
 <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-555555?style=flat-square">
 </p>
@@ -51,8 +51,8 @@ in to Pinterest in your browser, pick your ad account, and connect Claude. It
 takes about two minutes.
 
 Terminal is only needed for this one step. After it, everything happens in
-**Claude Code** or the **Claude desktop app**: setup connects both. Quit and
-reopen the desktop app once so it loads the tools, then ask it something.
+**Claude Code** or the **Claude desktop app**: setup connects both, and
+restarts the desktop app for you so it loads the tools. Then ask it something.
 
 > [!TIP]
 > Got a **setup code** from a teammate? Add it and you skip straight to signing in:
@@ -370,7 +370,7 @@ git clone https://github.com/leofriend1048/Pinterest-management-.git
 cd Pinterest-management- && uv sync
 
 uv run pinterest-ads-mcp setup            # registers this checkout with Claude
-uv run pytest                             # 88 tests, no network
+uv run pytest                             # 91 tests, no network
 uv run python scripts/update_spec.py      # pull Pinterest's latest API description
 uv run python scripts/render_screens.py   # regenerate the README screenshots
 ```

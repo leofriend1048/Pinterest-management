@@ -284,3 +284,41 @@ def test_registration_failure_gives_one_line_and_the_manual_command(monkeypatch)
     assert not ok and "applyHandlers" not in message
     assert "error: EINVAL" in message
     assert 'claude mcp add --scope user pinterest-ads -- "/Users/a b/bin/pinterest-ads-mcp"' in message
+
+
+# ── Claude desktop app ────────────────────────────────────────────────────────
+
+
+def desktop(monkeypatch, tmp_path, running):
+    config = tmp_path / "claude_desktop_config.json"
+    events = []
+    monkeypatch.setattr(onboarding, "claude_code_available", lambda: False)
+    monkeypatch.setattr(onboarding, "claude_desktop_available", lambda: True)
+    monkeypatch.setattr(onboarding, "desktop_config_path", lambda: config)
+    monkeypatch.setattr(onboarding, "claude_desktop_running", lambda: running)
+    monkeypatch.setattr(onboarding, "quit_claude_desktop", lambda: events.append("quit") or True)
+    monkeypatch.setattr(onboarding, "open_claude_desktop", lambda: events.append("open"))
+    return config, events
+
+
+def test_open_desktop_app_is_restarted_around_the_config_change(monkeypatch, tmp_path):
+    config, events = desktop(monkeypatch, tmp_path, running=True)
+    monkeypatch.setattr(onboarding.Confirm, "ask", lambda *a, **k: True)
+    console = quiet()
+    assert onboarding.connect_claude(console, assume_yes=False) is True
+    assert events == ["quit", "open"]
+    assert "pinterest-ads" in json.loads(config.read_text())["mcpServers"]
+
+
+def test_open_desktop_app_without_restart_is_reported_as_not_connected(monkeypatch, tmp_path):
+    config, events = desktop(monkeypatch, tmp_path, running=True)
+    console = quiet()
+    # --yes never closes someone's app; it warns that the change may not stick.
+    assert onboarding.connect_claude(console, assume_yes=True) is False
+    assert events == [] and "may not stick" in text(console)
+
+
+def test_closed_desktop_app_just_gets_the_entry(monkeypatch, tmp_path):
+    config, events = desktop(monkeypatch, tmp_path, running=False)
+    assert onboarding.connect_claude(quiet(), assume_yes=True) is True
+    assert events == [] and "pinterest-ads" in json.loads(config.read_text())["mcpServers"]

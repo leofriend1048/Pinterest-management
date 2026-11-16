@@ -183,6 +183,29 @@ def claude_code_registered() -> bool | None:
     return done.returncode == 0
 
 
+def claude_desktop_running() -> bool:
+    if sys.platform != "darwin":
+        return False
+    done = subprocess.run(["pgrep", "-x", "Claude"], stdin=subprocess.DEVNULL, capture_output=True)
+    return done.returncode == 0
+
+
+def quit_claude_desktop(wait_seconds: int = 20) -> bool:
+    """Ask the desktop app to quit and wait until it has."""
+    subprocess.run(["osascript", "-e", 'tell application "Claude" to quit'],
+                   stdin=subprocess.DEVNULL, capture_output=True)
+    deadline = time.time() + wait_seconds
+    while time.time() < deadline:
+        if not claude_desktop_running():
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def open_claude_desktop() -> None:
+    subprocess.run(["open", "-a", "Claude"], stdin=subprocess.DEVNULL, capture_output=True)
+
+
 def register_claude_desktop(command: list[str], path: Path | None = None) -> tuple[bool, str]:
     path = path or desktop_config_path()
     try:
@@ -193,7 +216,7 @@ def register_claude_desktop(command: list[str], path: Path | None = None) -> tup
     servers[SERVER_NAME] = {"command": command[0], "args": command[1:]}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(config, indent=2) + "\n")
-    return True, "Added to Claude Desktop. Quit and reopen it to load the tools."
+    return True, "Added to the Claude desktop app."
 
 
 # ── wizard steps ──────────────────────────────────────────────────────────────
@@ -393,9 +416,28 @@ def connect_claude(console: Console, assume_yes: bool) -> bool:
         info(console, "Claude Code not found (install it from claude.com/claude-code).")
     if claude_desktop_available():
         if assume_yes or Confirm.ask("    Add it to the Claude desktop app too?", default=True, console=console):
+            # While it is open the app rewrites its settings file and drops our
+            # entry, so the change only sticks if the app is closed first.
+            was_running = claude_desktop_running()
+            restarted = False
+            if was_running and not assume_yes and Confirm.ask(
+                "    The Claude desktop app is open and must restart to load the tools. "
+                "Restart it now?", default=True, console=console,
+            ):
+                restarted = quit_claude_desktop()
+                if not restarted:
+                    warn(console, "Claude did not quit. Quit it yourself (Cmd+Q), then run setup again.")
             success, message = register_claude_desktop(command)
-            (ok if success else fail)(console, message)
-            connected = connected or success
+            if success and was_running and not restarted:
+                warn(console, "The Claude desktop app is open, so this may not stick. Quit it "
+                              "(Cmd+Q), then run [bold]pinterest-ads-mcp setup[/bold] again.")
+            elif success:
+                ok(console, message + ("" if not was_running else " Reopening it now."))
+            else:
+                fail(console, message)
+            if restarted:
+                open_claude_desktop()
+            connected = connected or (success and (restarted or not was_running))
     if not connected:
         warn(console, "Not connected to Claude yet. Install Claude Code, then run "
                       "[bold]pinterest-ads-mcp setup[/bold] again.")

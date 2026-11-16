@@ -39,7 +39,7 @@ def setup_screen() -> Console:
     ob.ok(c, "Installed your team's account notes (targets, naming, rules).")
     ob.step(c, 5, "Connect to Claude")
     ob.ok(c, "Added to Claude Code.")
-    ob.ok(c, "Added to Claude Desktop. Quit and reopen it to load the tools.")
+    ob.ok(c, "Added to the Claude desktop app. Reopening it now.")
     c.print()
     c.print(ob.results_table(
         "Acme Skincare",
