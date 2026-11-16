@@ -303,6 +303,10 @@ def pinterest_run_report(
                      "CLICKTHROUGH_1", "TOTAL_CHECKOUT", "TOTAL_CHECKOUT_VALUE_IN_MICRO_DOLLAR"],
          "click_window_days": 7, "view_window_days": 1}
 
+    Pinterest leaves archived campaigns, ad groups and ads out unless you pass
+    campaign_statuses / ad_group_statuses / ad_statuses listing every status
+    (include "ARCHIVED"). Do that for any historical period.
+
     See pinterest_describe_endpoint("analytics/create_report") for every column,
     filter and attribution option. Spend and value columns are micro-dollars.
     """

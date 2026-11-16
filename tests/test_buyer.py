@@ -656,3 +656,27 @@ def test_ad_creation_gives_up_after_waiting_and_keeps_the_pin(monkeypatch, tmp_p
     with pytest.raises(ValueError, match=r"pin_id 901.*Retry with pin_id"):
         buyer.pinterest_launch_ad(
             ad_group_id="10", video_path=str(video), destination_url="https://shop.example", title="T")
+
+
+# ── report completeness ───────────────────────────────────────────────────────
+
+
+def test_reports_ask_for_archived_entities(fake):
+    buyer.pinterest_performance(level="campaign")
+    assert "ARCHIVED" in fake.report_bodies[-1]["campaign_statuses"]
+    assert "ad_group_statuses" not in fake.report_bodies[-1]
+    buyer.pinterest_performance(level="ad")
+    body = fake.report_bodies[-1]
+    assert "ARCHIVED" in body["campaign_statuses"] and "ARCHIVED" in body["ad_group_statuses"]
+    assert "ARCHIVED" in body["ad_statuses"] and "RUNNING" not in body["ad_statuses"]
+    buyer.pinterest_performance(level="account")
+    assert "campaign_statuses" not in fake.report_bodies[-1]      # account totals are already complete
+    buyer.pinterest_account_overview()
+    assert "ARCHIVED" in fake.report_bodies[-1]["campaign_statuses"]
+
+
+def test_weekly_and_monthly_rows_keep_their_date(fake):
+    fake.report_rows = {"2026-11-02T00:00:00": [
+        {"CAMPAIGN_ID": 1, "CAMPAIGN_NAME": "A", "SPEND_IN_DOLLAR": 10.0, "DATE_RANGE": "2026-11-02 - 2026-11-08"}]}
+    out = json.loads(buyer.pinterest_performance(level="campaign", breakdown="week"))
+    assert out["rows"][0]["date"] == "2026-11-02 - 2026-11-08"

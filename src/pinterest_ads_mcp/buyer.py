@@ -28,7 +28,7 @@ from . import credentials, dashboard, reports
 from mcp.server.fastmcp import Image
 
 from .client import PinterestError, expand_files, upload_video
-from .server import READ, WRITE, LOCAL, _render, client, mcp
+from .server import CACHE_DIR, MAX_INLINE_CHARS, READ, WRITE, LOCAL, _render, client, mcp
 
 MICRO = 1_000_000
 CONTEXT_FILE = "context.md"
@@ -107,6 +107,26 @@ SORTABLE = Literal[
     "spend", "roas", "cpa", "revenue", "purchases", "ctr", "cpc", "cpm", "impressions",
     "hook_rate", "hold_rate", "name", "date",
 ]
+# Pinterest's reports silently leave out archived campaigns, ad groups and ads
+# unless every status is asked for, which understates any historical period
+# (verified live: a 2024 quarter came back $33K short at campaign level).
+ENTITY_STATUSES = ["RUNNING", "PAUSED", "NOT_STARTED", "COMPLETED", "ADVERTISER_DISABLED", "ARCHIVED"]
+AD_STATUSES = ["APPROVED", "PAUSED", "PENDING", "REJECTED", "ADVERTISER_DISABLED", "ARCHIVED"]
+
+
+def with_all_statuses(body: dict) -> dict:
+    """Ask a report for every entity that delivered, whatever its status is now."""
+    level = body.get("level", "")
+    out = dict(body)
+    if not level.startswith("ADVERTISER"):
+        out.setdefault("campaign_statuses", ENTITY_STATUSES)
+    if level.startswith(("AD_GROUP", "PIN_PROMOTION")):
+        out.setdefault("ad_group_statuses", ENTITY_STATUSES)
+    if level.startswith("PIN_PROMOTION"):
+        out.setdefault("ad_statuses", AD_STATUSES)
+    return out
+
+
 DEFINITIONS = {
     "spend / revenue / cpa / cpc / cpm / aov": "US dollars",
     "impressions, clicks": "paid only (earned activity from saves is excluded)",
@@ -379,7 +399,7 @@ def pinterest_performance(
     }
     body.update({k: v for k, v in windows.items() if v is not None})
 
-    raw_rows = reports.flatten(reports.run(client(), body))
+    raw_rows = reports.flatten(reports.run(client(), with_all_statuses(body)))
 
     rows = []
     totals: dict[str, float] = {}
@@ -420,7 +440,8 @@ def pinterest_performance(
         if segment_by != "none":
             row["segment"] = raw.get("TARGETING_VALUE")
         if breakdown != "total":
-            row["date"] = raw.get("DATE")
+            # Daily rows carry DATE; weekly and monthly rows carry DATE_RANGE.
+            row["date"] = raw.get("DATE") or raw.get("DATE_RANGE")
         row.update(summarize(raw, include_video))
         if row["spend"] >= min_spend:
             rows.append(row)
@@ -438,7 +459,7 @@ def pinterest_performance(
     attribution = {k: v for k, v in windows.items() if v is not None} or (
         "Pinterest defaults: 30-day click, 30-day engagement, 1-day view"
     )
-    return _render(
+    payload = (
         {
             "level": level,
             "date_range": {"start": start, "end": end},
@@ -455,9 +476,25 @@ def pinterest_performance(
                 "pinterest_playbook('attribution-northbeam') and show Northbeam ROAS for the "
                 "same dates beside these; row ids match Northbeam's campaignId / adsetId / adId."
             ),
-        },
-        "performance",
+        }
     )
+    text = json.dumps(payload, indent=1, ensure_ascii=False)
+    if len(text) > MAX_INLINE_CHARS:
+        # Too long to return whole: keep the totals and the top rows inline and
+        # save the complete table to a file the caller can read.
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        saved = CACHE_DIR / f"performance-{int(time.time() * 1000)}.json"
+        saved.write_text(text)
+        keep = 40
+        payload["rows"] = shown[:keep]
+        payload["rows_shown"] = min(keep, len(shown))
+        payload["all_rows_saved_to"] = str(saved)
+        payload["note"] = (f"{len(shown)} rows is too many to return inline. The top {payload['rows_shown']} "
+                           "are here; the full table is in all_rows_saved_to. Totals cover every row.")
+        text = json.dumps(payload, indent=1, ensure_ascii=False)
+    return text
+
+
 
 
 @mcp.tool(annotations=READ)
@@ -562,13 +599,13 @@ def pinterest_account_overview(date_range: DateRange = "last_7_days") -> str:
     raw_rows = reports.flatten(
         reports.run(
             api,
-            {
+            with_all_statuses({
                 "start_date": start,
                 "end_date": end,
                 "granularity": "TOTAL",
                 "level": "CAMPAIGN",
                 "columns": LEVELS["campaign"][1] + METRICS,
-            },
+            }),
         )
     )
     by_campaign = {str(r.get("CAMPAIGN_ID")): r for r in raw_rows}
@@ -1245,7 +1282,7 @@ def pinterest_compare(
     body.update({k: v for k, v in windows.items() if v is not None})
     id_column = {"campaign": "CAMPAIGN_ID", "ad_group": "AD_GROUP_ID", "ad": "AD_ID"}[level]
     name_column = {"campaign": "CAMPAIGN_NAME", "ad_group": "AD_GROUP_NAME", "ad": "AD_NAME"}[level]
-    rows = {str(r.get(id_column)): r for r in reports.flatten(reports.run(client(), body))}
+    rows = {str(r.get(id_column)): r for r in reports.flatten(reports.run(client(), with_all_statuses(body)))}
     missing = [i for i in (str(id_a), str(id_b)) if i not in rows]
     if missing:
         raise ValueError(f"No delivery in {start} to {end} for {level} id(s): {', '.join(missing)}")
@@ -1362,9 +1399,9 @@ def pinterest_dashboard(
     api = client()
 
     def report(level: str, columns: list[str], first: date, granularity: str, **more) -> list[dict]:
-        return reports.flatten(reports.run(api, {
+        return reports.flatten(reports.run(api, with_all_statuses({
             "start_date": first.isoformat(), "end_date": end_s, "granularity": granularity,
-            "level": level, "columns": columns, **extra, **more}))
+            "level": level, "columns": columns, **extra, **more})))
 
     jobs = {
         "daily": lambda: report("ADVERTISER", METRICS, prior_start, "DAY"),
